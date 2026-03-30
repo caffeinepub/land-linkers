@@ -1,0 +1,65 @@
+@font-face {
+  font-family: "Playfair Display";
+  src: url("/assets/fonts/PlayfairDisplay.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "DM Sans";
+  src: url("/assets/fonts/DMSans.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Navy #14324A → oklch(0.27 0.055 237) */
+    --navy: 0.27 0.055 237;
+    /* Cream #E7E0D1 → oklch(0.89 0.018 80) */
+    --background: 0.89 0.018 80;
+    /* White surface */
+    --card: 1 0 0;
+    /* Primary text #1F1F1F → oklch(0.15 0 0) */
+    --foreground: 0.15 0 0;
+    /* Muted text #6B6F72 → oklch(0.48 0.008 235) */
+    --muted-foreground: 0.48 0.008 235;
+    /* Green #2E6B4A → oklch(0.43 0.1 160) */
+    --primary: 0.43 0.1 160;
+    --primary-foreground: 1 0 0;
+    /* Secondary lighter green */
+    --secondary: 0.92 0.02 160;
+    --secondary-foreground: 0.27 0.055 237;
+    /* Borders */
+    --border: 0.82 0.015 80;
+    --input: 0.82 0.015 80;
+    --ring: 0.43 0.1 160;
+    /* Muted bg */
+    --muted: 0.93 0.01 80;
+    /* Accent */
+    --accent: 0.88 0.025 80;
+    --accent-foreground: 0.27 0.055 237;
+    /* Destructive */
+    --destructive: 0.55 0.2 27;
+    --destructive-foreground: 1 0 0;
+    /* Popover */
+    --popover: 1 0 0;
+    --popover-foreground: 0.15 0 0;
+    /* Radius */
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}

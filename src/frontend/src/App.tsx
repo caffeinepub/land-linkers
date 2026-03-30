@@ -7,7 +7,10 @@ import {
   createRouter,
   redirect,
 } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Footer } from "./components/Footer";
 import { Header } from "./components/Header";
@@ -19,6 +22,13 @@ import { LoginPage } from "./pages/LoginPage";
 import { OwnerPage } from "./pages/OwnerPage";
 import { PhotoSlideshowPage } from "./pages/PhotoSlideshowPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { auth, db } from "./utils/firebase";
+import {
+  clearPhoneSession,
+  getPhoneSession,
+  signOutUser,
+} from "./utils/firebaseStore";
+import type { AppUser } from "./utils/firebaseStore";
 
 const ADMIN_EMAIL = "admin@J";
 const ADMIN_PASSWORD = "Guru@4473";
@@ -65,7 +75,6 @@ function buildRouter(userType: UserType | null) {
     component: OwnerPage,
   });
 
-  // /admin-portal — only accessible to admin
   const adminPortalRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/admin-portal",
@@ -75,13 +84,11 @@ function buildRouter(userType: UserType | null) {
     component: AdminPage,
   });
 
-  // /admin — admins go to /admin-portal; all other users go to home (Login page)
   const adminRedirectRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/admin",
     beforeLoad: () => {
       if (userType === "admin") throw redirect({ to: "/admin-portal" });
-      // Non-admins and guests redirect to home (which is the Login page for logged-out users)
       throw redirect({ to: "/" });
     },
     component: () => null,
@@ -221,9 +228,53 @@ function AdminLoginForm({ onLogin }: { onLogin: (type: UserType) => void }) {
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userType, setUserType] = useState<UserType | null>(null);
+  // true while we are checking for a persisted session on first load
+  const [authChecking, setAuthChecking] = useState(true);
   const routerRef = useRef<ReturnType<typeof buildRouter> | null>(null);
 
-  const logout = () => {
+  // Restore persisted session on mount (runs once)
+  useEffect(() => {
+    let resolved = false;
+
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (resolved) return; // only run once on initial load
+      resolved = true;
+
+      if (firebaseUser) {
+        // Email user with active Firebase Auth session — fetch role from Firestore
+        try {
+          const userSnap = await getDoc(doc(db, "users", firebaseUser.uid));
+          if (userSnap.exists()) {
+            const role = (userSnap.data() as AppUser).role;
+            _userType = role;
+            routerRef.current = buildRouter(role);
+            setUserType(role);
+            setIsLoggedIn(true);
+            setAuthChecking(false);
+            return;
+          }
+        } catch {
+          // Firestore unavailable — fall through to show login
+        }
+      }
+
+      // No Firebase Auth session — check phone session cache
+      const phoneSession = getPhoneSession();
+      if (phoneSession) {
+        _userType = phoneSession.role;
+        routerRef.current = buildRouter(phoneSession.role);
+        setUserType(phoneSession.role);
+        setIsLoggedIn(true);
+      }
+
+      setAuthChecking(false);
+    });
+
+    return () => unsub();
+  }, []);
+
+  const logout = async () => {
+    await signOutUser();
     setIsLoggedIn(false);
     setUserType(null);
     _userType = null;
@@ -239,11 +290,17 @@ export default function App() {
     setIsLoggedIn(true);
   };
 
+  // Minimal spinner while checking persisted session (~100–300ms on cached sessions)
+  if (authChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   if (!isLoggedIn || !routerRef.current) {
     const path = window.location.pathname;
-
-    // ONLY /admin-portal shows the dedicated admin login form.
-    // /admin and any other URL shows the regular Login page.
     const isAdminPortalPath =
       path === "/admin-portal" || path.startsWith("/admin-portal/");
 
@@ -251,7 +308,6 @@ export default function App() {
       return <AdminLoginForm onLogin={handleLogin} />;
     }
 
-    // Everyone else (including /admin visitors) sees the regular Login page.
     return (
       <>
         <Toaster richColors position="top-right" />

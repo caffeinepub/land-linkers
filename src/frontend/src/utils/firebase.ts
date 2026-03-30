@@ -1,18 +1,23 @@
-// IMPORTANT: Replace these placeholder values with your own Firebase project config.
-// Go to Firebase Console (https://console.firebase.google.com)
-//   → Your Project → Project Settings → Your apps → Firebase SDK snippet (Config)
-// Then paste the config object below.
-
 import { initializeApp } from "firebase/app";
+import {
+  browserLocalPersistence,
+  getAuth,
+  setPersistence,
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyApjKduIOTIymsqlhyLK_towxY2GeWua4s",
+  authDomain: "land-linkers.firebaseapp.com",
+  projectId: "land-linkers",
+  storageBucket: "land-linkers.firebasestorage.app",
+  messagingSenderId: "111360206242",
+  appId: "1:111360206242:web:525c889dd3aa447ef73efb",
 };
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+export const auth = getAuth(app);
+
+// Keep users logged in across browser sessions and page refreshes
+setPersistence(auth, browserLocalPersistence).catch(() => {});

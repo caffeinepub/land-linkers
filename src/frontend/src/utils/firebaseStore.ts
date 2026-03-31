@@ -468,16 +468,14 @@ export async function loginUser(
         code === "auth/invalid-login-credentials" ||
         code === "auth/invalid-credential"
       ) {
-        // Could be legacy user — check Firestore before showing wrong-password
-        return loginUserFromFirestore(loginId, password, true);
+        return { status: "wrong-password" };
       }
 
-      if (code === "auth/user-not-found") {
-        // Legacy user without Firebase Auth account — migrate on login
-        return loginUserFromFirestore(loginId, password, true);
+      if (code === "auth/user-not-found" || code === "auth/invalid-email") {
+        return { status: "not-found" };
       }
 
-      // Network / config issue — try Firestore
+      // Network / config issue only — try Firestore as last resort
       return loginUserFromFirestore(loginId, password, false);
     }
   }
@@ -535,12 +533,7 @@ async function loginUserFromFirestore(
 
     return { status: "success", user };
   } catch {
-    // localStorage fallback
-    const users = lsGetUsers();
-    const user = users.find((u) => u.loginId === loginId);
-    if (!user) return { status: "not-found" };
-    if (user.password !== password) return { status: "wrong-password" };
-    return { status: "success", user };
+    return { status: "not-found" };
   }
 }
 

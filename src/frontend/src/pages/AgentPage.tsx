@@ -70,7 +70,6 @@ export function AgentPage() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [salesListOpen, setSalesListOpen] = useState(false);
   const [mapDialogOpen, setMapDialogOpen] = useState(false);
-  const [locationMapOpen, setLocationMapOpen] = useState(false);
   const [locationSavedCoords, setLocationSavedCoords] = useState<{
     lat: number;
     lng: number;
@@ -98,6 +97,8 @@ export function AgentPage() {
   const [leadsCity, setLeadsCity] = useState("");
   const [selectedLead, setSelectedLead] = useState<PlotListing | null>(null);
   const [leadDetailOpen, setLeadDetailOpen] = useState(false);
+  const [plotDetailOpen, setPlotDetailOpen] = useState(false);
+  const [selectedPlot, setSelectedPlot] = useState<PlotListing | null>(null);
   const [nearbyLeadsOpen, setNearbyLeadsOpen] = useState(false);
 
   // Graph tab toggle
@@ -167,7 +168,6 @@ export function AgentPage() {
         const lat = Number.parseFloat(data[0].lat);
         const lng = Number.parseFloat(data[0].lon);
         setLocationMapCenter([lat, lng]);
-        setLocationMapOpen(true);
       } else {
         toast.error("Address not found. Try a more specific address.");
       }
@@ -383,9 +383,23 @@ export function AgentPage() {
                         ) : (
                           <MapPin className="w-4 h-4" />
                         )}
-                        {isLocationGeocoding ? "..." : "View on Map"}
+                        {isLocationGeocoding ? "..." : "Search"}
                       </Button>
                     </div>
+                    <div className="mt-3" style={{ height: "280px" }}>
+                      <PlotMapPicker
+                        center={locationMapCenter}
+                        pinnedCoords={locationSavedCoords}
+                        onPin={(coords) => setLocationSavedCoords(coords)}
+                      />
+                    </div>
+                    {locationSavedCoords && (
+                      <span className="inline-flex items-center gap-1.5 text-xs bg-green-100 text-green-700 border border-green-200 rounded-full px-3 py-1 font-medium mt-2">
+                        <MapPin className="w-3 h-3" />📍 Pinned:{" "}
+                        {locationSavedCoords.lat.toFixed(5)},{" "}
+                        {locationSavedCoords.lng.toFixed(5)}
+                      </span>
+                    )}
                   </div>
 
                   {/* Image Upload with staging */}
@@ -630,17 +644,19 @@ export function AgentPage() {
                               For Sale
                             </span>
                           </div>
-                          {listing.photoLink && (
-                            <a
-                              href={listing.photoLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-primary hover:underline mt-1 inline-block"
-                              data-ocid="agent.link"
-                            >
-                              View Photos →
-                            </a>
-                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-1 text-xs h-7 px-2"
+                            onClick={() => {
+                              setSelectedPlot(listing);
+                              setSalesListOpen(false);
+                              setPlotDetailOpen(true);
+                            }}
+                            data-ocid="agent.secondary_button"
+                          >
+                            View Plot Details
+                          </Button>
                         </div>
                       ))
                     )}
@@ -675,84 +691,24 @@ export function AgentPage() {
                               Sold
                             </span>
                           </div>
-                          {listing.photoLink && (
-                            <a
-                              href={listing.photoLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-primary hover:underline mt-1 inline-block"
-                              data-ocid="agent.link"
-                            >
-                              View Photos →
-                            </a>
-                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-1 text-xs h-7 px-2"
+                            onClick={() => {
+                              setSelectedPlot(listing);
+                              setSalesListOpen(false);
+                              setPlotDetailOpen(true);
+                            }}
+                            data-ocid="agent.secondary_button"
+                          >
+                            View Plot Details
+                          </Button>
                         </div>
                       ))
                     )}
                   </TabsContent>
                 </Tabs>
-              </DialogContent>
-            </Dialog>
-
-            {/* Location Picker Map Dialog */}
-            <Dialog open={locationMapOpen} onOpenChange={setLocationMapOpen}>
-              <DialogContent
-                className="max-w-3xl w-full"
-                data-ocid="agent.dialog"
-              >
-                <DialogHeader>
-                  <DialogTitle className="font-serif text-xl flex items-center gap-2">
-                    <MapIcon className="w-5 h-5 text-primary" />
-                    View Plot Location
-                  </DialogTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Your address has been located on the map. If this looks
-                    correct, click "Save Location" to confirm it.
-                  </p>
-                </DialogHeader>
-                <PlotMapPicker
-                  center={locationMapCenter}
-                  pinnedCoords={locationSavedCoords}
-                  onPin={(coords) => {
-                    setLocationSavedCoords(coords);
-                  }}
-                />
-                <div className="flex items-center justify-between mt-3">
-                  {locationSavedCoords ? (
-                    <span className="inline-flex items-center gap-1.5 text-xs bg-green-100 text-green-700 border border-green-200 rounded-full px-3 py-1 font-medium">
-                      <MapPin className="w-3 h-3" />
-                      Saved: {locationSavedCoords.lat.toFixed(5)},{" "}
-                      {locationSavedCoords.lng.toFixed(5)}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      Does this location look correct?
-                    </span>
-                  )}
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setLocationSavedCoords({
-                          lat: locationMapCenter[0],
-                          lng: locationMapCenter[1],
-                        });
-                        toast.success("Location saved!");
-                      }}
-                      data-ocid="agent.secondary_button"
-                    >
-                      Save Location
-                    </Button>
-                    <Button
-                      onClick={() => setLocationMapOpen(false)}
-                      disabled={!locationSavedCoords}
-                      className="bg-primary hover:bg-primary/90 text-white"
-                      data-ocid="agent.confirm_button"
-                    >
-                      Confirm Location
-                    </Button>
-                  </div>
-                </div>
               </DialogContent>
             </Dialog>
 
@@ -882,12 +838,11 @@ export function AgentPage() {
                             {
                               listings.filter(
                                 (l) =>
-                                  l.addedBy === "owner" &&
-                                  (l.status === "for-sale" ||
-                                    l.status === "pending"),
+                                  l.status === "for-sale" &&
+                                  l.verified === true,
                               ).length
                             }{" "}
-                            owner plots available
+                            approved plots for sale
                           </p>
                         </div>
                       </div>
@@ -912,9 +867,7 @@ export function AgentPage() {
                     </div>
                     {(() => {
                       const ownerLeads = listings.filter(
-                        (l) =>
-                          l.addedBy === "owner" &&
-                          (l.status === "for-sale" || l.status === "pending"),
+                        (l) => l.status === "for-sale" && l.verified === true,
                       );
                       const filteredLeads = ownerLeads.filter((lead) => {
                         if (!leadsCity.trim()) return true;
@@ -1107,6 +1060,62 @@ export function AgentPage() {
                     This plot is visible to verified agents for quick
                     networking.
                   </p>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={plotDetailOpen} onOpenChange={setPlotDetailOpen}>
+            <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle className="font-serif text-xl">
+                  Plot Details
+                </DialogTitle>
+              </DialogHeader>
+              {selectedPlot && (
+                <div className="space-y-4 mt-2">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">
+                      {selectedPlot.ownerName}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedPlot.location ||
+                        selectedPlot.plotAddress ||
+                        "No address"}
+                    </p>
+                    {selectedPlot.plotPhasing && (
+                      <p className="text-xs text-muted-foreground">
+                        {selectedPlot.plotPhasing}
+                      </p>
+                    )}
+                    {selectedPlot.price && (
+                      <p className="text-sm font-semibold text-primary">
+                        ₹{selectedPlot.price}
+                      </p>
+                    )}
+                    {selectedPlot.plotSize && (
+                      <p className="text-xs text-muted-foreground">
+                        {selectedPlot.plotSize} sq.yd
+                      </p>
+                    )}
+                  </div>
+                  {selectedPlot.photoUrls &&
+                  selectedPlot.photoUrls.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      {selectedPlot.photoUrls.map((url, i) => (
+                        <img
+                          key={url}
+                          src={url}
+                          alt={`Plot view ${i + 1}`}
+                          className="w-full rounded-lg object-cover aspect-video"
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground text-center py-4">
+                      No photos available.
+                    </p>
+                  )}
                 </div>
               )}
             </DialogContent>

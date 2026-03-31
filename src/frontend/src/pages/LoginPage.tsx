@@ -164,8 +164,10 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       toast.error("Please enter the 6-digit OTP.");
       return;
     }
-    toast.success("OTP verified! Logging you in…");
-    onLogin(forgotRole!);
+    toast.error(
+      "Password reset via OTP is not available. Please contact support.",
+    );
+    setScreen("login");
   };
 
   return (

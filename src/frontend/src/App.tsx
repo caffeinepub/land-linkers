@@ -59,6 +59,7 @@ function buildRouter(userType: UserType | null) {
     getParentRoute: () => rootRoute,
     path: "/agent",
     beforeLoad: () => {
+      if (!userType) throw redirect({ to: "/" });
       if (userType === "owner") throw redirect({ to: "/owner" });
       if (userType === "admin") throw redirect({ to: "/admin-portal" });
     },
@@ -69,6 +70,7 @@ function buildRouter(userType: UserType | null) {
     getParentRoute: () => rootRoute,
     path: "/owner",
     beforeLoad: () => {
+      if (!userType) throw redirect({ to: "/" });
       if (userType === "agent") throw redirect({ to: "/agent" });
       if (userType === "admin") throw redirect({ to: "/admin-portal" });
     },

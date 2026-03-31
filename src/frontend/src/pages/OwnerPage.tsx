@@ -67,7 +67,6 @@ export function OwnerPage() {
   const [submittedListings, setSubmittedListings] = useState<PlotListing[]>([]);
 
   // Map state
-  const [mapOpen, setMapOpen] = useState(false);
   const [savedCoords, setSavedCoords] = useState<{
     lat: number;
     lng: number;
@@ -136,7 +135,6 @@ export function OwnerPage() {
         const lat = Number.parseFloat(data[0].lat);
         const lng = Number.parseFloat(data[0].lon);
         setMapCenter([lat, lng]);
-        setMapOpen(true);
       } else {
         toast.error("Address not found. Try a more specific address.");
       }
@@ -463,6 +461,38 @@ export function OwnerPage() {
                       data-ocid="owner.input"
                       required
                     />
+                    <div className="mt-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleViewOnMap}
+                        disabled={isGeocoding}
+                        className="gap-1.5"
+                        data-ocid="owner.secondary_button"
+                      >
+                        {isGeocoding ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <MapIcon className="w-3.5 h-3.5" />
+                        )}
+                        {isGeocoding ? "Searching..." : "Search on Map"}
+                      </Button>
+                    </div>
+                    <div className="mt-3" style={{ height: "350px" }}>
+                      <PlotMapPicker
+                        center={mapCenter}
+                        pinnedCoords={savedCoords}
+                        onPin={setSavedCoords}
+                      />
+                    </div>
+                    {savedCoords && (
+                      <span className="inline-flex items-center gap-1.5 text-xs bg-green-100 text-green-700 border border-green-200 rounded-full px-3 py-1 font-medium mt-2">
+                        <MapPin className="w-3 h-3" />📍 Pinned:{" "}
+                        {savedCoords.lat.toFixed(5)},{" "}
+                        {savedCoords.lng.toFixed(5)}
+                      </span>
+                    )}
                   </div>
                   <div>
                     <label
@@ -557,21 +587,6 @@ export function OwnerPage() {
             <Card data-ocid="owner.card">
               <CardContent className="pt-6">
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleViewOnMap}
-                    disabled={isGeocoding}
-                    className="gap-2 flex-1 sm:flex-none"
-                    data-ocid="owner.secondary_button"
-                  >
-                    {isGeocoding ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <MapIcon className="w-4 h-4" />
-                    )}
-                    {isGeocoding ? "Searching..." : "View on Map"}
-                  </Button>
                   <Button
                     type="submit"
                     disabled={isSubmitting}
@@ -691,63 +706,6 @@ export function OwnerPage() {
               </div>
             </motion.div>
           )}
-
-          {/* Map Dialog */}
-          <Dialog open={mapOpen} onOpenChange={setMapOpen}>
-            <DialogContent
-              className="max-w-3xl w-full"
-              data-ocid="owner.dialog"
-            >
-              <DialogHeader>
-                <DialogTitle className="font-serif text-xl flex items-center gap-2">
-                  <MapIcon className="w-5 h-5 text-primary" />
-                  View Plot Location
-                </DialogTitle>
-                <p className="text-sm text-muted-foreground">
-                  Verify the location. Click "Save Location" if it looks
-                  correct.
-                </p>
-              </DialogHeader>
-              <PlotMapPicker
-                center={mapCenter}
-                pinnedCoords={savedCoords}
-                onPin={setSavedCoords}
-              />
-              <div className="flex items-center justify-between mt-3">
-                {savedCoords ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs bg-green-100 text-green-700 border border-green-200 rounded-full px-3 py-1 font-medium">
-                    <MapPin className="w-3 h-3" />
-                    Saved: {savedCoords.lat.toFixed(5)},{" "}
-                    {savedCoords.lng.toFixed(5)}
-                  </span>
-                ) : (
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setSavedCoords({
-                          lat: mapCenter[0],
-                          lng: mapCenter[1],
-                        })
-                      }
-                      data-ocid="owner.secondary_button"
-                    >
-                      <MapPin className="w-3.5 h-3.5 mr-1" />
-                      Save Location
-                    </Button>
-                  </div>
-                )}
-                <Button
-                  onClick={() => setMapOpen(false)}
-                  className="bg-primary hover:bg-primary/90 text-white"
-                  data-ocid="owner.confirm_button"
-                >
-                  Confirm Location
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
         </motion.div>
       </div>
     </main>

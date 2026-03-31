@@ -23,6 +23,7 @@ import {
   Copy,
   ImageIcon,
   Loader2,
+  Mail,
   Map as MapIcon,
   MapPin,
   Phone,
@@ -34,7 +35,7 @@ import {
   Users,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -47,25 +48,21 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import PlotMapPicker from "../components/PlotMapPicker";
+import { useAuth } from "../context/AuthContext";
+import { auth } from "../utils/firebase";
 import {
   compressImage,
   getListings,
   saveListing,
   savePhotos,
+  updateListingStatus,
 } from "../utils/firebaseStore";
 import type { PlotListing } from "../utils/firebaseStore";
 
-const chartData = [
-  { month: "Jan", sold: 2, uploaded: 3 },
-  { month: "Feb", sold: 3, uploaded: 4 },
-  { month: "Mar", sold: 4, uploaded: 5 },
-  { month: "Apr", sold: 5, uploaded: 6 },
-  { month: "May", sold: 8, uploaded: 7 },
-  { month: "Jun", sold: 12, uploaded: 8 },
-];
-
 export function AgentPage() {
+  const { userName, userLoginId, userCreatedAt } = useAuth();
   const [listings, setListings] = useState<PlotListing[]>([]);
+  const [userCity, setUserCity] = useState<string>("Locating...");
   const [formOpen, setFormOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [salesListOpen, setSalesListOpen] = useState(false);
@@ -104,18 +101,154 @@ export function AgentPage() {
   // Graph tab toggle
   const [graphTab, setGraphTab] = useState<"sold" | "map">("sold");
 
+  // Map refs for plot pins
+  const plotMapRef = useRef<HTMLDivElement>(null);
+  const plotLeafletRef = useRef<any>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    getListings().then(setListings);
+    getListings().then((allListings) => {
+      const uid = auth.currentUser?.uid;
+      const myPlots = allListings.filter(
+        (p) =>
+          p.addedBy === "agent" &&
+          (!p.assignedAgentId || p.assignedAgentId === uid),
+      );
+      const assignedPlots = allListings.filter(
+        (p) => p.assignedAgentId === uid,
+      );
+      const merged = [
+        ...new Map(
+          [...myPlots, ...assignedPlots].map((p) => [p.id, p]),
+        ).values(),
+      ];
+      setListings(merged);
+    });
   }, []);
+
+  // GPS location effect
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const { latitude, longitude } = pos.coords;
+          try {
+            const res = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
+            );
+            const data = await res.json();
+            const city =
+              data.address?.city ||
+              data.address?.town ||
+              data.address?.village ||
+              data.address?.county ||
+              "Unknown";
+            const state = data.address?.state || "";
+            setUserCity(state ? `${city}, ${state}` : city);
+          } catch {
+            setUserCity("Location unavailable");
+          }
+        },
+        () => setUserCity("Location unavailable"),
+      );
+    } else {
+      setUserCity("Location unavailable");
+    }
+  }, []);
+
+  // Plot map pins effect
+  useEffect(() => {
+    if (graphTab !== "map") return;
+    const timer = setTimeout(() => {
+      if (!plotMapRef.current) return;
+      if (plotLeafletRef.current) {
+        plotLeafletRef.current.remove();
+        plotLeafletRef.current = null;
+      }
+      // Try both import styles
+      let L: any;
+      try {
+        L = (window as any).L || require("leaflet");
+      } catch {
+        L = (window as any).L;
+      }
+      if (!L) return;
+      const map = L.map(plotMapRef.current).setView([20.5937, 78.9629], 5);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "\u00a9 OpenStreetMap contributors",
+      }).addTo(map);
+
+      const plotsWithCoords = listings.filter((l) => l.lat && l.lng);
+      for (const plot of plotsWithCoords) {
+        const marker = L.marker([plot.lat, plot.lng]).addTo(map);
+        marker.bindPopup(
+          `<strong>${plot.ownerName || "Plot"}</strong><br/>${plot.location || ""}<br/>Status: ${plot.status}`,
+        );
+      }
+
+      if (plotsWithCoords.length > 0) {
+        const bounds = L.latLngBounds(
+          plotsWithCoords.map((p) => [p.lat, p.lng]),
+        );
+        map.fitBounds(bounds, { padding: [30, 30] });
+      }
+
+      plotLeafletRef.current = map;
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [graphTab, listings]);
 
   const forSaleListings = listings.filter((l) => l.status === "for-sale");
   const soldListings = listings.filter((l) => l.status === "sold");
-  const uploadedForSales = forSaleListings.filter(
-    (l) => l.addedBy === "agent",
-  ).length;
+  const uploadedForSales = listings.filter((l) => l.addedBy === "agent").length;
+
+  // Dynamic chart data
+  const dynamicChartData = useMemo(() => {
+    const months: Record<
+      string,
+      { month: string; sold: number; uploaded: number }
+    > = {};
+    const monthNames = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+
+    for (const l of listings) {
+      if (!l.createdAt) return;
+      const d = new Date(l.createdAt);
+      if (Number.isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      const label = `${monthNames[d.getMonth()]} ${d.getFullYear().toString().slice(2)}`;
+      if (!months[key]) months[key] = { month: label, sold: 0, uploaded: 0 };
+      if (l.status === "sold") months[key].sold++;
+      else months[key].uploaded++;
+    }
+
+    const sorted = Object.entries(months)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, v]) => v);
+
+    if (sorted.length === 0) {
+      const now = new Date();
+      return Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
+        return { month: `${monthNames[d.getMonth()]}`, sold: 0, uploaded: 0 };
+      });
+    }
+    return sorted;
+  }, [listings]);
 
   const handleFilesAdded = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -134,7 +267,6 @@ export function AgentPage() {
     try {
       const id =
         Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      // Compress before upload
       const compressedFiles = await Promise.all(
         pendingImages.map(compressImage),
       );
@@ -175,6 +307,18 @@ export function AgentPage() {
       toast.error("Failed to search address. Check your connection.");
     } finally {
       setIsLocationGeocoding(false);
+    }
+  };
+
+  const handleMarkAsSold = async (listingId: string) => {
+    try {
+      await updateListingStatus(listingId, "sold");
+      setListings((prev) =>
+        prev.map((l) => (l.id === listingId ? { ...l, status: "sold" } : l)),
+      );
+      toast.success("Plot marked as sold!");
+    } catch {
+      toast.error("Failed to update status.");
     }
   };
 
@@ -244,11 +388,8 @@ export function AgentPage() {
                       </div>
                       <div className="text-left">
                         <CardTitle className="font-serif text-lg text-foreground">
-                          Arjun Mehta
+                          {userName || "Agent"}
                         </CardTitle>
-                        <p className="text-muted-foreground text-xs">
-                          Senior Land Agent · Land Linkers
-                        </p>
                       </div>
                     </div>
                     <ChevronDown
@@ -261,16 +402,24 @@ export function AgentPage() {
                 <CardContent className="pt-0 pb-5">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
                     <div className="flex items-center gap-2 text-muted-foreground">
-                      <Phone className="w-4 h-4 text-primary shrink-0" />
-                      <span>+91 98765 43210</span>
+                      {userLoginId?.includes("@") ? (
+                        <Mail className="w-4 h-4 text-primary shrink-0" />
+                      ) : (
+                        <Phone className="w-4 h-4 text-primary shrink-0" />
+                      )}
+                      <span>{userLoginId || "\u2014"}</span>
                     </div>
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <MapPin className="w-4 h-4 text-primary shrink-0" />
-                      <span>Hyderabad, Telangana</span>
+                      <span>{userCity}</span>
                     </div>
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Calendar className="w-4 h-4 text-primary shrink-0" />
-                      <span>Joined January 2022</span>
+                      <span>
+                        {userCreatedAt
+                          ? `Joined ${new Date(userCreatedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}`
+                          : "\u2014"}
+                      </span>
                     </div>
                   </div>
                 </CardContent>
@@ -395,7 +544,8 @@ export function AgentPage() {
                     </div>
                     {locationSavedCoords && (
                       <span className="inline-flex items-center gap-1.5 text-xs bg-green-100 text-green-700 border border-green-200 rounded-full px-3 py-1 font-medium mt-2">
-                        <MapPin className="w-3 h-3" />📍 Pinned:{" "}
+                        <MapPin className="w-3 h-3" />
+                        \uD83D\uDCCD Pinned:{" "}
                         {locationSavedCoords.lat.toFixed(5)},{" "}
                         {locationSavedCoords.lng.toFixed(5)}
                       </span>
@@ -473,7 +623,7 @@ export function AgentPage() {
                                 data-ocid="agent.delete_button"
                               >
                                 <span className="text-xs font-bold leading-none">
-                                  ✕
+                                  \u2715
                                 </span>
                               </button>
                             </div>
@@ -501,7 +651,7 @@ export function AgentPage() {
                     {confirmedPhotoLink && (
                       <div className="mt-3 p-2.5 bg-green-50 border border-green-200 rounded-lg">
                         <p className="text-xs font-medium text-green-800 mb-1.5">
-                          ✓ Photos confirmed ({confirmedPhotoUrls.length})
+                          \u2713 Photos confirmed ({confirmedPhotoUrls.length})
                         </p>
                         <div className="flex items-center gap-2">
                           <a
@@ -575,7 +725,7 @@ export function AgentPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="font-serif font-bold text-4xl text-foreground">
-                      {uploadedForSales || 8}
+                      {uploadedForSales}
                     </div>
                     <p className="text-muted-foreground text-xs mt-1">
                       Click to view all listed plots
@@ -644,19 +794,31 @@ export function AgentPage() {
                               For Sale
                             </span>
                           </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="mt-1 text-xs h-7 px-2"
-                            onClick={() => {
-                              setSelectedPlot(listing);
-                              setSalesListOpen(false);
-                              setPlotDetailOpen(true);
-                            }}
-                            data-ocid="agent.secondary_button"
-                          >
-                            View Plot Details
-                          </Button>
+                          <div className="flex gap-2 mt-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-7 px-2"
+                              onClick={() => {
+                                setSelectedPlot(listing);
+                                setSalesListOpen(false);
+                                setPlotDetailOpen(true);
+                              }}
+                              data-ocid="agent.secondary_button"
+                            >
+                              View Plot Details
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="text-xs h-7 px-2 bg-orange-500 hover:bg-orange-600 text-white"
+                              onClick={() =>
+                                listing.id && handleMarkAsSold(listing.id)
+                              }
+                              data-ocid="agent.secondary_button"
+                            >
+                              Mark as Sold
+                            </Button>
+                          </div>
                         </div>
                       ))
                     )}
@@ -727,10 +889,10 @@ export function AgentPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="font-serif font-bold text-4xl text-foreground">
-                      {forSaleListings.length}
+                      {soldListings.length}
                     </div>
                     <p className="text-muted-foreground text-xs mt-1">
-                      View all plots on map
+                      Plots sold \u2014 view all on map
                     </p>
                   </CardContent>
                 </Card>
@@ -927,7 +1089,7 @@ export function AgentPage() {
                                 {lead.plotSize && (
                                   <span>{lead.plotSize} sq.yd</span>
                                 )}
-                                {lead.price && <span>₹{lead.price}</span>}
+                                {lead.price && <span>\u20b9{lead.price}</span>}
                               </div>
                               <Button
                                 size="sm"
@@ -1027,7 +1189,7 @@ export function AgentPage() {
                         <div>
                           <p className="text-xs text-muted-foreground">Price</p>
                           <p className="text-foreground font-medium">
-                            ₹{selectedLead.price}
+                            \u20b9{selectedLead.price}
                           </p>
                         </div>
                       )}
@@ -1051,7 +1213,7 @@ export function AgentPage() {
                       </Badge>
                       {selectedLead.verified && (
                         <Badge className="bg-blue-100 text-blue-800 border-blue-200">
-                          ✓ Verified
+                          \u2713 Verified
                         </Badge>
                       )}
                     </div>
@@ -1090,7 +1252,7 @@ export function AgentPage() {
                     )}
                     {selectedPlot.price && (
                       <p className="text-sm font-semibold text-primary">
-                        ₹{selectedPlot.price}
+                        \u20b9{selectedPlot.price}
                       </p>
                     )}
                     {selectedPlot.plotSize && (
@@ -1130,7 +1292,7 @@ export function AgentPage() {
                     Sales Performance
                   </CardTitle>
                   <p className="text-muted-foreground text-sm mt-0.5">
-                    Plots sold vs uploaded over the last 6 months
+                    Plots sold vs uploaded over time
                   </p>
                 </div>
                 {/* Tab toggle pills */}
@@ -1158,7 +1320,7 @@ export function AgentPage() {
                     data-ocid="agent.tab"
                   >
                     <MapIcon className="w-3 h-3" />
-                    Agent &amp; Owner Plot Sales
+                    Plot Locations
                   </button>
                 </div>
               </div>
@@ -1167,7 +1329,7 @@ export function AgentPage() {
               {graphTab === "sold" ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <LineChart
-                    data={chartData}
+                    data={dynamicChartData}
                     margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -1219,28 +1381,26 @@ export function AgentPage() {
                   <div className="flex items-center gap-2 px-3 py-2 bg-primary/5 rounded-lg border border-primary/10 shrink-0">
                     <MapPin className="w-4 h-4 text-primary shrink-0" />
                     <span className="text-sm font-semibold text-foreground">
-                      {forSaleListings.length} plots listed for sale
+                      {listings.filter((l) => l.lat && l.lng).length} plots with
+                      GPS coordinates
                     </span>
                     <span className="text-xs text-muted-foreground ml-1">
-                      — all agent &amp; owner listings
+                      \u2014 recently updated locations
                     </span>
                   </div>
-                  {/* Map */}
-                  <div className="flex-1 rounded-xl overflow-hidden border border-border">
-                    <iframe
-                      title="Agent & Owner Plot Sales Overview"
-                      width="100%"
-                      height="100%"
-                      style={{ border: 0 }}
-                      src="https://www.openstreetmap.org/export/embed.html?bbox=68.0,8.0,97.5,37.0&layer=mapnik"
-                    />
-                  </div>
-                  {forSaleListings.length === 0 && (
+                  {/* Leaflet Map with pins */}
+                  <div
+                    className="flex-1 rounded-xl overflow-hidden border border-border"
+                    ref={plotMapRef}
+                    style={{ minHeight: "200px" }}
+                  />
+                  {listings.filter((l) => l.lat && l.lng).length === 0 && (
                     <p
                       className="text-center text-muted-foreground text-xs"
                       data-ocid="agent.empty_state"
                     >
-                      No plots listed yet. List a plot to see it here.
+                      No plots with GPS coordinates yet. Pin a location when
+                      uploading a plot.
                     </p>
                   )}
                 </div>

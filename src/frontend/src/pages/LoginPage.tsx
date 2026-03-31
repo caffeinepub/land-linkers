@@ -19,7 +19,12 @@ import type { UserType } from "../context/AuthContext";
 import { loginUser, registerUser } from "../utils/firebaseStore";
 
 interface LoginPageProps {
-  onLogin: (userType: UserType) => void;
+  onLogin: (
+    userType: UserType,
+    name?: string,
+    loginId?: string,
+    createdAt?: string,
+  ) => void;
 }
 
 type Screen =
@@ -87,7 +92,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       // success — use the role stored in the database
       if (result.user) {
         toast.success("Welcome back!");
-        onLogin(result.user.role);
+        const { auth: firebaseAuth } = await import("../utils/firebase");
+        const createdAt = firebaseAuth.currentUser?.metadata?.creationTime;
+        onLogin(
+          result.user.role,
+          result.user.name,
+          result.user.loginId || loginId.trim(),
+          createdAt,
+        );
       }
     } catch {
       setLoginError(
@@ -134,7 +146,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       }
 
       toast.success("Account created! Welcome to Land Linkers.");
-      onLogin(signupRole!);
+      const { auth: firebaseAuth2 } = await import("../utils/firebase");
+      const signupCreatedAt = firebaseAuth2.currentUser?.metadata?.creationTime;
+      onLogin(
+        signupRole!,
+        signupName.trim(),
+        signupLoginId.trim(),
+        signupCreatedAt,
+      );
     } catch {
       toast.error(
         "Unable to connect. Please check your internet and try again.",

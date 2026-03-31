@@ -13,39 +13,51 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Calendar,
   Camera,
   Check,
   CheckCircle,
+  ChevronDown,
   Copy,
   ImageIcon,
   Loader2,
+  Mail,
   Map as MapIcon,
   MapPin,
   Phone,
   Trash2,
+  Upload,
   User,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import PlotMapPicker from "../components/PlotMapPicker";
+import { useAuth } from "../context/AuthContext";
+import { auth } from "../utils/firebase";
 import {
   compressImage,
-  deleteListing,
-  deletePlotPhotos,
+  getListings,
   saveListing,
   savePhotos,
+  updateListingStatus,
   updateUserLastLogin,
 } from "../utils/firebaseStore";
 import type { PlotListing } from "../utils/firebaseStore";
 
 export function OwnerPage() {
+  const { userName, userLoginId, userCreatedAt } = useAuth();
   const [pendingImages, setPendingImages] = useState<File[]>([]);
   const [confirmedPhotoLink, setConfirmedPhotoLink] = useState<string | null>(
     null,
@@ -65,6 +77,8 @@ export function OwnerPage() {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedListings, setSubmittedListings] = useState<PlotListing[]>([]);
+  const [userCity, setUserCity] = useState<string>("Locating...");
+  const [profileOpen, setProfileOpen] = useState(false);
 
   // Map state
   const [savedCoords, setSavedCoords] = useState<{
@@ -82,6 +96,50 @@ export function OwnerPage() {
   // Track last login for inactivity logic
   useEffect(() => {
     updateUserLastLogin("owner_default", "owner");
+  }, []);
+
+  // GPS location effect
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const { latitude, longitude } = pos.coords;
+          try {
+            const res = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
+            );
+            const data = await res.json();
+            const city =
+              data.address?.city ||
+              data.address?.town ||
+              data.address?.village ||
+              data.address?.county ||
+              "Unknown";
+            const state = data.address?.state || "";
+            setUserCity(state ? `${city}, ${state}` : city);
+          } catch {
+            setUserCity("Location unavailable");
+          }
+        },
+        () => setUserCity("Location unavailable"),
+      );
+    } else {
+      setUserCity("Location unavailable");
+    }
+  }, []);
+
+  // Load owner's existing plots from Firestore on mount
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    getListings().then((allListings) => {
+      const myPlots = allListings.filter(
+        (p) => p.addedBy === "owner" && p.ownerId === uid,
+      );
+      if (myPlots.length > 0) {
+        setSubmittedListings(myPlots);
+      }
+    });
   }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -166,6 +224,7 @@ export function OwnerPage() {
         verified: false,
         createdAt: new Date().toISOString(),
         lastOwnerLogin: new Date().toISOString(),
+        ownerId: auth.currentUser?.uid,
         ...(savedCoords ? { lat: savedCoords.lat, lng: savedCoords.lng } : {}),
       };
       const id = await saveListing(newListing);
@@ -193,12 +252,11 @@ export function OwnerPage() {
 
   const handleMarkAsSold = async (listing: PlotListing) => {
     try {
-      await Promise.all([
-        deleteListing(listing.id),
-        deletePlotPhotos(listing.id, listing.photoUrls || []),
-      ]);
-      setSubmittedListings((prev) => prev.filter((l) => l.id !== listing.id));
-      toast.success("Plot marked as sold and removed.");
+      await updateListingStatus(listing.id, "sold");
+      setSubmittedListings((prev) =>
+        prev.map((l) => (l.id === listing.id ? { ...l, status: "sold" } : l)),
+      );
+      toast.success("Plot marked as sold!");
     } catch {
       toast.error("Failed to mark as sold.");
     }
@@ -212,14 +270,106 @@ export function OwnerPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
+          {/* Owner Profile Card */}
+          <Collapsible
+            open={profileOpen}
+            onOpenChange={setProfileOpen}
+            className="mb-8"
+          >
+            <Card data-ocid="owner.card" className="border-primary/20">
+              <CollapsibleTrigger asChild>
+                <button
+                  type="button"
+                  className="w-full"
+                  data-ocid="owner.panel"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <User className="w-5 h-5 text-primary" />
+                      </div>
+                      <div className="text-left">
+                        <CardTitle className="font-serif text-lg text-foreground">
+                          {userName || "Owner"}
+                        </CardTitle>
+                      </div>
+                    </div>
+                    <ChevronDown
+                      className={`w-5 h-5 text-muted-foreground transition-transform ${profileOpen ? "rotate-180" : ""}`}
+                    />
+                  </CardHeader>
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <CardContent className="pt-0 pb-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      {userLoginId?.includes("@") ? (
+                        <Mail className="w-4 h-4 text-primary shrink-0" />
+                      ) : (
+                        <Phone className="w-4 h-4 text-primary shrink-0" />
+                      )}
+                      <span>{userLoginId || "—"}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <MapPin className="w-4 h-4 text-primary shrink-0" />
+                      <span>{userCity}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Calendar className="w-4 h-4 text-primary shrink-0" />
+                      <span>
+                        {userCreatedAt
+                          ? `Joined ${new Date(userCreatedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}`
+                          : "—"}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </CollapsibleContent>
+            </Card>
+          </Collapsible>
+
           {/* Page Header */}
           <div className="mb-8">
             <h1 className="font-serif font-bold text-3xl text-foreground">
               Owner Portal
             </h1>
+            <p className="text-primary font-medium text-sm mt-0.5">
+              Welcome, {userName || "Owner"}
+            </p>
             <p className="text-muted-foreground mt-1">
               Upload images and fill in your plot details to list your property
             </p>
+          </div>
+
+          {/* Stats */}
+          <div className="grid grid-cols-2 gap-4 mb-8">
+            <Card data-ocid="owner.card">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Uploaded for Sales
+                </CardTitle>
+                <Upload className="w-5 h-5 text-primary" />
+              </CardHeader>
+              <CardContent>
+                <div className="font-serif font-bold text-4xl text-foreground">
+                  {submittedListings.filter((l) => l.status !== "sold").length}
+                </div>
+              </CardContent>
+            </Card>
+            <Card data-ocid="owner.card">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Plots Sold
+                </CardTitle>
+                <CheckCircle className="w-5 h-5 text-primary" />
+              </CardHeader>
+              <CardContent>
+                <div className="font-serif font-bold text-4xl text-foreground">
+                  {submittedListings.filter((l) => l.status === "sold").length}
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -629,6 +779,11 @@ export function OwnerPage() {
                                 Verified
                               </Badge>
                             )}
+                            {listing.status === "sold" && (
+                              <Badge className="bg-gray-100 text-gray-700 border-gray-200 text-xs">
+                                Sold
+                              </Badge>
+                            )}
                           </div>
                           <div className="text-xs text-muted-foreground space-y-0.5">
                             {listing.plotAddress && (
@@ -661,44 +816,46 @@ export function OwnerPage() {
                         </div>
 
                         {/* Mark as Sold */}
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              className="shrink-0 gap-1.5"
-                              data-ocid={`owner.delete_button.${i + 1}`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              Mark as Sold
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent data-ocid="owner.dialog">
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>
-                                Mark plot as sold?
-                              </AlertDialogTitle>
-                              <AlertDialogDescription>
-                                This will permanently delete the plot listing
-                                for <strong>{listing.ownerName}</strong> and all
-                                its photos from the database. This action cannot
-                                be undone.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel data-ocid="owner.cancel_button">
-                                Cancel
-                              </AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => handleMarkAsSold(listing)}
-                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                data-ocid="owner.confirm_button"
+                        {listing.status !== "sold" && (
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                className="shrink-0 gap-1.5"
+                                data-ocid={`owner.delete_button.${i + 1}`}
                               >
-                                Yes, Mark as Sold
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Mark as Sold
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent data-ocid="owner.dialog">
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>
+                                  Mark plot as sold?
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This will mark the plot for{" "}
+                                  <strong>{listing.ownerName}</strong> as sold
+                                  and update the counter. The listing will
+                                  remain visible with a Sold badge.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel data-ocid="owner.cancel_button">
+                                  Cancel
+                                </AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => handleMarkAsSold(listing)}
+                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  data-ocid="owner.confirm_button"
+                                >
+                                  Yes, Mark as Sold
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        )}
                       </div>
                     </CardContent>
                   </Card>

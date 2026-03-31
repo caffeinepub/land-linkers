@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Link, useLocation } from "@tanstack/react-router";
-import { LogOut, MapPin, Menu, Shield, X } from "lucide-react";
+import { LogOut, Menu, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
@@ -21,7 +21,10 @@ function getNavLinks(userType: "agent" | "owner" | "admin" | null): NavLink[] {
     ];
   }
   if (userType === "admin") {
-    return [{ label: "Dashboard", to: "/admin-portal" }];
+    return [
+      { label: "Home", to: "/" },
+      { label: "Dashboard", to: "/admin-portal" },
+    ];
   }
   return [
     { label: "Home", to: "/" },
@@ -63,19 +66,17 @@ export function Header() {
             data-ocid="header.link"
             className="flex items-center gap-3 group"
           >
-            <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform">
-              {userType === "admin" ? (
-                <Shield className="w-5 h-5 text-white" />
-              ) : (
-                <MapPin className="w-5 h-5 text-white" />
-              )}
-            </div>
+            <img
+              src="/assets/image-019d4503-4266-7396-af3a-623deafe0238.png"
+              alt="Land Linkers"
+              className="w-10 h-10 rounded-full object-cover shadow-lg group-hover:scale-105 transition-transform"
+            />
             <div>
               <div className="font-serif font-bold text-white text-lg leading-tight">
                 {userType === "admin" ? "Admin Panel" : "Land Linkers"}
               </div>
               <div className="text-white/60 text-xs tracking-widest uppercase">
-                {userType === "admin" ? "Land Linkers" : "The Land Hub"}
+                Connecting Spaces
               </div>
             </div>
           </Link>

@@ -38,8 +38,11 @@ export interface PlotListing {
   status: "for-sale" | "sold" | "hidden" | "pending";
   addedBy: "owner" | "agent";
   verified: boolean;
+  assignedAgentId?: string;
+  assignedAgentName?: string;
   createdAt: string;
   lastOwnerLogin?: string;
+  ownerId?: string;
   lat?: number;
   lng?: number;
 }
@@ -472,7 +475,8 @@ export async function loginUser(
       }
 
       if (code === "auth/user-not-found" || code === "auth/invalid-email") {
-        return { status: "not-found" };
+        // User not in Firebase Auth — may be a Firestore-only account (phone or legacy)
+        return loginUserFromFirestore(loginId, password, true);
       }
 
       // Network / config issue only — try Firestore as last resort
@@ -569,4 +573,20 @@ export async function deleteUser(id: string): Promise<void> {
     const all = lsGetUsers().filter((u) => u.id !== id);
     localStorage.setItem(LS_USERS_KEY, JSON.stringify(all));
   }
+}
+
+export async function getAgentUsers(): Promise<AppUser[]> {
+  try {
+    const q = query(collection(db, "users"), where("role", "==", "agent"));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as AppUser);
+  } catch {
+    return lsGetUsers().filter((u) => u.role === "agent");
+  }
+}
+
+export async function assignPlotToAgent(
+  listing: Omit<PlotListing, "id">,
+): Promise<string> {
+  return saveListing(listing);
 }

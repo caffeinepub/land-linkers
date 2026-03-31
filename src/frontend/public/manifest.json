@@ -1,0 +1,23 @@
+{
+  "name": "Land Linkers",
+  "short_name": "Land Linkers",
+  "description": "Connecting Spaces",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1a3a5c",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/assets/image-019d4503-4266-7396-af3a-623deafe0238.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/image-019d4503-4266-7396-af3a-623deafe0238.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}

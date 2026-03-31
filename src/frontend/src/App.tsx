@@ -32,6 +32,7 @@ import type { AppUser } from "./utils/firebaseStore";
 
 const ADMIN_EMAIL = "admin@J";
 const ADMIN_PASSWORD = "Guru@4473";
+const NEW_LOGO = "/assets/image-019d4503-4266-7396-af3a-623deafe0238.png";
 
 let _userType: UserType | null = null;
 
@@ -134,7 +135,16 @@ declare module "@tanstack/react-router" {
   }
 }
 
-function AdminLoginForm({ onLogin }: { onLogin: (type: UserType) => void }) {
+function AdminLoginForm({
+  onLogin,
+}: {
+  onLogin: (
+    type: UserType,
+    name?: string,
+    loginId?: string,
+    createdAt?: string,
+  ) => void;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -142,7 +152,7 @@ function AdminLoginForm({ onLogin }: { onLogin: (type: UserType) => void }) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-      onLogin("admin");
+      onLogin("admin", "Admin");
     } else {
       setError("Invalid admin credentials. Please try again.");
       toast.error("Invalid admin credentials.");
@@ -154,10 +164,17 @@ function AdminLoginForm({ onLogin }: { onLogin: (type: UserType) => void }) {
       <Toaster richColors position="top-right" />
       <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
         <div className="text-center mb-6">
+          <img
+            src={NEW_LOGO}
+            alt="Land Linkers"
+            className="w-16 h-16 rounded-2xl mx-auto mb-3 shadow-md"
+          />
           <div className="text-3xl font-bold text-green-700 mb-1">
             Land Linkers
           </div>
-          <div className="text-sm text-gray-500">The Land Hub</div>
+          <div className="text-sm text-gray-500 tracking-widest uppercase">
+            Connecting Spaces
+          </div>
           <div className="mt-4 text-lg font-semibold text-gray-800">
             Admin Portal
           </div>
@@ -230,9 +247,27 @@ function AdminLoginForm({ onLogin }: { onLogin: (type: UserType) => void }) {
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userType, setUserType] = useState<UserType | null>(null);
+  const [userName, setUserName] = useState<string | undefined>(undefined);
+  const [userLoginId, setUserLoginId] = useState<string | undefined>(undefined);
+  const [userCreatedAt, setUserCreatedAt] = useState<string | undefined>(
+    undefined,
+  );
   // true while we are checking for a persisted session on first load
   const [authChecking, setAuthChecking] = useState(true);
+  // Splash screen states
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashFading, setSplashFading] = useState(false);
   const routerRef = useRef<ReturnType<typeof buildRouter> | null>(null);
+
+  // Splash screen timer — always show for 4.5s then fade out
+  useEffect(() => {
+    const fadeTimer = setTimeout(() => setSplashFading(true), 4500);
+    const hideTimer = setTimeout(() => setShowSplash(false), 5000);
+    return () => {
+      clearTimeout(fadeTimer);
+      clearTimeout(hideTimer);
+    };
+  }, []);
 
   // Restore persisted session on mount (runs once)
   useEffect(() => {
@@ -247,10 +282,17 @@ export default function App() {
         try {
           const userSnap = await getDoc(doc(db, "users", firebaseUser.uid));
           if (userSnap.exists()) {
-            const role = (userSnap.data() as AppUser).role;
+            const data = userSnap.data() as AppUser;
+            const role = data.role;
+            const name = data.name;
+            const loginId = data.loginId || data.email || data.mobile;
+            const createdAt = firebaseUser.metadata?.creationTime || undefined;
             _userType = role;
             routerRef.current = buildRouter(role);
             setUserType(role);
+            setUserName(name);
+            setUserLoginId(loginId);
+            setUserCreatedAt(createdAt);
             setIsLoggedIn(true);
             setAuthChecking(false);
             return;
@@ -266,6 +308,8 @@ export default function App() {
         _userType = phoneSession.role;
         routerRef.current = buildRouter(phoneSession.role);
         setUserType(phoneSession.role);
+        setUserName(phoneSession.loginId);
+        setUserLoginId(phoneSession.loginId);
         setIsLoggedIn(true);
       }
 
@@ -279,24 +323,55 @@ export default function App() {
     await signOutUser();
     setIsLoggedIn(false);
     setUserType(null);
+    setUserName(undefined);
+    setUserLoginId(undefined);
+    setUserCreatedAt(undefined);
     _userType = null;
     routerRef.current = null;
   };
 
-  const handleLogin = (type: UserType) => {
+  const handleLogin = (
+    type: UserType,
+    name?: string,
+    loginId?: string,
+    createdAt?: string,
+  ) => {
     _userType = type;
     routerRef.current = buildRouter(type);
     const destination = type === "admin" ? "/admin-portal" : "/";
     routerRef.current.navigate({ to: destination });
     setUserType(type);
+    setUserName(name);
+    setUserLoginId(loginId);
+    setUserCreatedAt(createdAt);
     setIsLoggedIn(true);
   };
 
-  // Minimal spinner while checking persisted session (~100–300ms on cached sessions)
+  // Always show splash for the first 5 seconds
+  if (showSplash) {
+    return (
+      <div
+        className="fixed inset-0 flex flex-col items-center justify-center bg-[#1a3a5c] z-50 transition-opacity duration-500"
+        style={{ opacity: splashFading ? 0 : 1 }}
+      >
+        <img
+          src={NEW_LOGO}
+          alt="Land Linkers"
+          className="w-[120px] h-[120px] rounded-2xl shadow-xl mb-5"
+        />
+        <div className="text-white text-4xl font-bold mb-2">Land Linkers</div>
+        <div className="text-white/70 text-sm tracking-widest uppercase">
+          Connecting Spaces
+        </div>
+      </div>
+    );
+  }
+
+  // Auth still resolving after splash hides — minimal spinner
   if (authChecking) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      <div className="min-h-screen flex items-center justify-center bg-[#1a3a5c]">
+        <Loader2 className="w-8 h-8 animate-spin text-white/60" />
       </div>
     );
   }
@@ -319,7 +394,15 @@ export default function App() {
   }
 
   return (
-    <AuthContext.Provider value={{ userType, onLogout: logout }}>
+    <AuthContext.Provider
+      value={{
+        userType,
+        userName,
+        userLoginId,
+        userCreatedAt,
+        onLogout: logout,
+      }}
+    >
       <RouterProvider router={routerRef.current} />
     </AuthContext.Provider>
   );

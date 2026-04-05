@@ -375,9 +375,9 @@ export default function App() {
 
         if (profile) {
           // Full profile found — restore everything
-          _userType = profile.role;
-          routerRef.current = buildRouter(profile.role);
-          setUserType(profile.role);
+          _userType = profile.role as UserType;
+          routerRef.current = buildRouter(profile.role as UserType);
+          setUserType(profile.role as UserType);
           setUserName(profile.name);
           setUserLoginId(
             profile.loginId || profile.email || profile.mobile || email,

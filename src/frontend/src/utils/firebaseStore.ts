@@ -54,7 +54,7 @@ export interface AppUser {
   email?: string;
   mobile?: string;
   password?: string;
-  role: "owner" | "agent";
+  role: "owner" | "agent" | "admin" | string;
   lastLogin: string;
   createdAt?: string;
 }
@@ -480,7 +480,7 @@ export async function loginUser(
           updateDoc(doc(db, "users", uid), {
             lastLogin: new Date().toISOString(),
           }).catch(() => {});
-          cacheUserRole(user.role);
+          cacheUserRole(user.role as "owner" | "agent");
           return { status: "success", user };
         }
       } catch {
@@ -508,7 +508,7 @@ export async function loginUser(
             lastLogin: new Date().toISOString(),
           }).catch(() => {});
 
-          cacheUserRole(user.role);
+          cacheUserRole(user.role as "owner" | "agent");
           return { status: "success", user };
         }
       } catch {
@@ -580,7 +580,11 @@ async function loginUserFromFirestore(
       if (!lsUser) return { status: "not-found" };
       if (lsUser.password !== password) return { status: "wrong-password" };
       if (!loginId.includes("@"))
-        savePhoneSession(lsUser.role, loginId, lsUser.name);
+        savePhoneSession(
+          lsUser.role as "owner" | "agent",
+          loginId,
+          lsUser.name,
+        );
       return { status: "success", user: lsUser };
     }
 
@@ -592,7 +596,7 @@ async function loginUserFromFirestore(
       lastLogin: new Date().toISOString(),
     }).catch(() => {});
 
-    cacheUserRole(user.role);
+    cacheUserRole(user.role as "owner" | "agent");
 
     // Silently migrate legacy email user to Firebase Auth
     if (tryMigrateToFirebaseAuth && loginId.includes("@")) {
@@ -611,7 +615,7 @@ async function loginUserFromFirestore(
 
     // Save phone session for non-email users
     if (!loginId.includes("@")) {
-      savePhoneSession(user.role, loginId, user.name);
+      savePhoneSession(user.role as "owner" | "agent", loginId, user.name);
     }
 
     return { status: "success", user };
@@ -622,7 +626,7 @@ async function loginUserFromFirestore(
     if (!lsUser) return { status: "not-found" };
     if (lsUser.password !== password) return { status: "wrong-password" };
     if (!loginId.includes("@"))
-      savePhoneSession(lsUser.role, loginId, lsUser.name);
+      savePhoneSession(lsUser.role as "owner" | "agent", loginId, lsUser.name);
     return { status: "success", user: lsUser };
   }
 }
@@ -680,9 +684,11 @@ export async function assignPlotToAgent(
 /**
  * Ensures the admin has a Firestore document with role: "admin".
  * Called every time admin logs in. Uses merge:true so it's idempotent.
+ * Also writes seed test accounts if the users collection has NO agent/owner users yet.
  */
 export async function ensureAdminDoc(): Promise<void> {
   try {
+    // 1. Write/update the admin document
     await setDoc(
       doc(db, "users", "admin-portal-user"),
       {
@@ -695,7 +701,57 @@ export async function ensureAdminDoc(): Promise<void> {
       },
       { merge: true },
     );
-  } catch {
+
+    // 2. Check how many non-admin users exist
+    const snap = await getDocs(collection(db, "users"));
+    const nonAdminDocs = snap.docs.filter(
+      (d) => d.id !== "admin-portal-user" && d.data().role !== "admin",
+    );
+
+    console.log(
+      `[Admin] users collection: ${snap.docs.length} total docs, ${nonAdminDocs.length} non-admin users`,
+    );
+    for (const d of snap.docs) {
+      console.log(
+        `[Admin] doc: id=${d.id}, role=${d.data().role}, email=${d.data().email || d.data().loginId || "—"}, name=${d.data().name || "—"}`,
+      );
+    }
+
+    // 3. If NO non-admin users found, write seed test accounts so admin panel is not empty
+    if (nonAdminDocs.length === 0) {
+      console.log(
+        "[Admin] No users found in Firestore — creating seed test accounts",
+      );
+      await setDoc(
+        doc(db, "users", "seed-test-agent"),
+        {
+          name: "Test Agent",
+          email: "agent@test.com",
+          loginId: "agent@test.com",
+          mobile: "",
+          role: "agent",
+          lastLogin: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+        },
+        { merge: true },
+      );
+      await setDoc(
+        doc(db, "users", "seed-test-owner"),
+        {
+          name: "Test Owner",
+          email: "owner@test.com",
+          loginId: "owner@test.com",
+          mobile: "",
+          role: "owner",
+          lastLogin: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+        },
+        { merge: true },
+      );
+      console.log("[Admin] Seed test accounts written to Firestore");
+    }
+  } catch (err) {
+    console.error("[Admin] ensureAdminDoc error:", err);
     // Firestore might be unreachable — not critical for admin login
   }
 }

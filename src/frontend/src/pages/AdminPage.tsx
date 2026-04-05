@@ -21,10 +21,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 import type { FirestoreError } from "firebase/firestore";
 import {
   AlertTriangle,
+  Bug,
   CalendarDays,
   CheckCircle,
   ImageIcon,
@@ -80,6 +81,8 @@ export function AdminPage() {
   const [retryKey, setRetryKey] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
+  const [rawSnapshotCount, setRawSnapshotCount] = useState<number | null>(null);
 
   const handleRetry = useCallback(() => {
     setError(null);
@@ -87,34 +90,29 @@ export function AdminPage() {
     setRetryKey((k) => k + 1);
   }, []);
 
-  // One-time connectivity check on mount — quickly surfaces permission-denied errors
-  // biome-ignore lint/correctness/useExhaustiveDependencies: retryKey is intentional trigger
-  useEffect(() => {
-    getDoc(doc(db, "users", "admin-portal-user"))
-      .then(() => {
-        // Firestore is reachable — no action needed
-      })
-      .catch((err: FirestoreError) => {
-        if (err.code === "permission-denied") {
-          setError(
-            "Permission denied: Your Firestore Security Rules are blocking reads. Update the rules in Firebase Console → Firestore → Rules using the template below.",
-          );
-          setLoading(false);
-        }
-      });
-  }, [retryKey]);
-
   // Real-time users listener
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryKey is intentional trigger
   useEffect(() => {
     const unsub = onSnapshot(
       collection(db, "users"),
       (snapshot) => {
+        // ── DEBUG: Log everything received from Firestore ──
+        console.log(
+          `[AdminPage] users onSnapshot fired. Total docs: ${snapshot.docs.length}`,
+        );
+        for (const d of snapshot.docs) {
+          const data = d.data();
+          console.log(
+            `[AdminPage] user doc: id=${d.id} | role=${data.role ?? "MISSING"} | email=${data.email ?? data.loginId ?? "—"} | name=${data.name ?? "—"}`,
+          );
+        }
+
         const usersData = snapshot.docs.map((d) => ({
           id: d.id,
           ...d.data(),
         })) as AppUser[];
         setUsers(usersData);
+        setRawSnapshotCount(snapshot.docs.length);
         setLoading(false);
       },
       (err: FirestoreError) => {
@@ -125,6 +123,7 @@ export function AdminPage() {
         } else {
           message = err.message || "Failed to load users.";
         }
+        console.error("[AdminPage] users onSnapshot error:", err.code, message);
         toast.error(message);
         setError(message);
         setLoading(false);
@@ -139,6 +138,9 @@ export function AdminPage() {
     const unsub = onSnapshot(
       collection(db, "plots"),
       (snapshot) => {
+        console.log(
+          `[AdminPage] plots onSnapshot fired. Total docs: ${snapshot.docs.length}`,
+        );
         const plotData = snapshot.docs.map((d) => ({
           id: d.id,
           ...d.data(),
@@ -153,8 +155,8 @@ export function AdminPage() {
         } else {
           message = err.message || "Failed to load plots.";
         }
+        console.error("[AdminPage] plots onSnapshot error:", err.code, message);
         toast.error(message);
-        // Only set error if not already set (users error takes precedence)
         setError((prev) => prev ?? message);
         setLoading(false);
       },
@@ -166,12 +168,10 @@ export function AdminPage() {
   const plotCountByUserId = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const plot of plots) {
-      // Primary: match by ownerId (Firestore UID)
       if (plot.ownerId) {
         counts[plot.ownerId] = (counts[plot.ownerId] ?? 0) + 1;
         continue;
       }
-      // Fallback: match by ownerEmail against user email / loginId / mobile
       if (plot.ownerEmail) {
         const matchedUser = users.find(
           (u) =>
@@ -219,7 +219,6 @@ export function AdminPage() {
   const handleDeleteUser = async (userId: string) => {
     try {
       await deleteUser(userId);
-      // users state will auto-update via onSnapshot
       toast.success(
         "User removed from database. To also remove their login access, delete them from Firebase Console → Authentication.",
       );
@@ -228,7 +227,6 @@ export function AdminPage() {
     }
   };
 
-  // Format joined date from createdAt field
   const formatJoinedDate = (createdAt?: string): string => {
     if (!createdAt) return "—";
     try {
@@ -241,32 +239,32 @@ export function AdminPage() {
     }
   };
 
-  // Sorted filtered lists — exclude admin-portal-user from displayed lists
-  const agentUsers = useMemo(() => {
-    return [
-      ...users.filter(
-        (u) => u.role === "agent" && u.id !== "admin-portal-user",
-      ),
-    ].sort(
-      (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
-    );
-  }, [users, plotCountByUserId]);
-
-  const ownerUsers = useMemo(() => {
-    return [
-      ...users.filter(
-        (u) => u.role === "owner" && u.id !== "admin-portal-user",
-      ),
-    ].sort(
-      (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
-    );
-  }, [users, plotCountByUserId]);
-
-  // Total real users count (excluding the admin doc)
-  const realUserCount = useMemo(
-    () => users.filter((u) => u.id !== "admin-portal-user").length,
+  // All non-admin users (includes any role value)
+  const allRealUsers = useMemo(
+    () =>
+      users.filter((u) => u.id !== "admin-portal-user" && u.role !== "admin"),
     [users],
   );
+
+  const agentUsers = useMemo(() => {
+    return [...allRealUsers.filter((u) => u.role === "agent")].sort(
+      (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
+    );
+  }, [allRealUsers, plotCountByUserId]);
+
+  const ownerUsers = useMemo(() => {
+    return [...allRealUsers.filter((u) => u.role === "owner")].sort(
+      (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
+    );
+  }, [allRealUsers, plotCountByUserId]);
+
+  // Users that have no recognized role (neither 'agent' nor 'owner')
+  const unknownRoleUsers = useMemo(
+    () => allRealUsers.filter((u) => u.role !== "agent" && u.role !== "owner"),
+    [allRealUsers],
+  );
+
+  const realUserCount = allRealUsers.length;
 
   return (
     <main className="bg-background min-h-screen">
@@ -276,7 +274,7 @@ export function AdminPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          {/* Admin Header with logo & branding */}
+          {/* Admin Header */}
           <div className="flex items-center justify-between gap-4 mb-8">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center overflow-hidden shrink-0">
@@ -287,8 +285,6 @@ export function AdminPage() {
                   onError={(e) => {
                     (e.currentTarget as HTMLImageElement).style.display =
                       "none";
-                    (e.currentTarget.parentElement as HTMLElement).innerHTML =
-                      '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
                   }}
                 />
               </div>
@@ -307,16 +303,86 @@ export function AdminPage() {
                 </p>
               </div>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onLogout}
-              className="gap-2 shrink-0 text-muted-foreground hover:text-destructive hover:border-destructive/40"
-            >
-              <LogOut className="w-4 h-4" />
-              Logout
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowDebug((v) => !v)}
+                className="gap-2 shrink-0 text-muted-foreground hover:text-foreground"
+                title="Toggle debug info"
+              >
+                <Bug className="w-4 h-4" />
+                Debug
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onLogout}
+                className="gap-2 shrink-0 text-muted-foreground hover:text-destructive hover:border-destructive/40"
+              >
+                <LogOut className="w-4 h-4" />
+                Logout
+              </Button>
+            </div>
           </div>
+
+          {/* ── Debug Panel ── */}
+          {showDebug && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6"
+            >
+              <Card className="border-amber-300/60 bg-amber-50/60 dark:bg-amber-950/20">
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-sm">
+                    <Bug className="w-4 h-4" />
+                    Debug Info (open browser DevTools → Console for full logs)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="text-xs font-mono space-y-1 text-amber-800 dark:text-amber-300">
+                  <p>
+                    Collection queried: <strong>users</strong>
+                  </p>
+                  <p>
+                    Raw docs in snapshot:{" "}
+                    <strong>{rawSnapshotCount ?? "loading…"}</strong>
+                  </p>
+                  <p>
+                    Non-admin users shown: <strong>{realUserCount}</strong>
+                  </p>
+                  <p>
+                    Agents: <strong>{agentUsers.length}</strong> | Owners:{" "}
+                    <strong>{ownerUsers.length}</strong> | Unknown role:{" "}
+                    <strong>{unknownRoleUsers.length}</strong>
+                  </p>
+                  <div className="mt-2 border-t border-amber-200 pt-2 space-y-0.5">
+                    <p className="font-semibold">All user docs:</p>
+                    {users.length === 0 && (
+                      <p className="text-red-600">
+                        ⚠ NO DOCS returned from Firestore. Check rules or
+                        collection name.
+                      </p>
+                    )}
+                    {users.map((u) => (
+                      <p key={u.id}>
+                        id=
+                        <span className="text-blue-700">
+                          {u.id.slice(0, 16)}…
+                        </span>
+                        {" | "}role=
+                        <span className="text-green-700">
+                          {u.role ?? "MISSING"}
+                        </span>
+                        {" | "}email={u.email ?? u.loginId ?? "—"}
+                        {" | "}name={u.name ?? "—"}
+                      </p>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
 
           {/* ── Error Banner ── */}
           {error && (
@@ -335,7 +401,6 @@ export function AdminPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <p className="text-sm text-destructive/90">{error}</p>
-
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-foreground">
                       Go to{" "}
@@ -346,7 +411,6 @@ export function AdminPage() {
                       {CORRECT_FIRESTORE_RULES}
                     </pre>
                   </div>
-
                   <div className="pt-1">
                     <Button
                       variant="outline"
@@ -442,7 +506,6 @@ export function AdminPage() {
                     >
                       <CardContent className="p-0">
                         <div className="flex flex-col sm:flex-row">
-                          {/* Thumbnail */}
                           <div className="w-full sm:w-36 h-36 bg-muted flex items-center justify-center shrink-0 overflow-hidden">
                             {plot.photoUrls && plot.photoUrls.length > 0 ? (
                               <img
@@ -454,8 +517,6 @@ export function AdminPage() {
                               <ImageIcon className="w-8 h-8 text-muted-foreground/40" />
                             )}
                           </div>
-
-                          {/* Details */}
                           <div className="flex-1 p-4">
                             <div className="flex flex-wrap items-start gap-2 mb-2">
                               <h3 className="font-semibold text-foreground text-base">
@@ -486,7 +547,6 @@ export function AdminPage() {
                                 by {plot.addedBy}
                               </Badge>
                             </div>
-
                             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground mb-3">
                               {plot.plotAddress && (
                                 <span className="flex items-center gap-1 col-span-2">
@@ -502,19 +562,11 @@ export function AdminPage() {
                               {plot.plotSize && (
                                 <span>{plot.plotSize} sq. yd</span>
                               )}
-                              {plot.layoutName && (
-                                <span>Layout: {plot.layoutName}</span>
-                              )}
-                              {plot.plotNumber && (
-                                <span>Plot #: {plot.plotNumber}</span>
-                              )}
                               {plot.ownerEmail && (
                                 <span>{plot.ownerEmail}</span>
                               )}
                             </div>
-
                             <div className="flex flex-wrap items-center gap-3">
-                              {/* Verify Toggle */}
                               <div className="flex items-center gap-2">
                                 <Switch
                                   checked={plot.verified}
@@ -532,8 +584,6 @@ export function AdminPage() {
                                       : "Mark Verified"}
                                 </span>
                               </div>
-
-                              {/* Delete Button */}
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
                                   <Button
@@ -558,8 +608,7 @@ export function AdminPage() {
                                       This will permanently remove the plot
                                       listing for{" "}
                                       <strong>{plot.ownerName}</strong> and all
-                                      its photos from Firebase. This cannot be
-                                      undone.
+                                      its photos. This cannot be undone.
                                     </AlertDialogDescription>
                                   </AlertDialogHeader>
                                   <AlertDialogFooter>
@@ -576,8 +625,6 @@ export function AdminPage() {
                                   </AlertDialogFooter>
                                 </AlertDialogContent>
                               </AlertDialog>
-
-                              {/* Photo link */}
                               {plot.photoLink && (
                                 <a
                                   href={plot.photoLink}
@@ -607,9 +654,7 @@ export function AdminPage() {
                     <Skeleton key={i} className="h-24 w-full rounded-xl" />
                   ))}
                 </div>
-              ) : agentUsers.length === 0 &&
-                ownerUsers.length === 0 &&
-                !error ? (
+              ) : realUserCount === 0 && !error ? (
                 <div
                   className="text-center py-16 text-muted-foreground"
                   data-ocid="admin.empty_state"
@@ -617,11 +662,21 @@ export function AdminPage() {
                   <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
                   <p className="font-medium">No users registered yet.</p>
                   <p className="text-xs mt-1 opacity-70">
-                    Users will appear here once they sign up through the app.
+                    Raw docs received: {rawSnapshotCount ?? 0}. If this is 0,
+                    check your Firestore rules and confirm the collection name
+                    is exactly <code>users</code>.
                   </p>
                 </div>
               ) : (
-                <Tabs defaultValue="agents">
+                <Tabs
+                  defaultValue={
+                    agentUsers.length > 0
+                      ? "agents"
+                      : ownerUsers.length > 0
+                        ? "owners"
+                        : "all"
+                  }
+                >
                   <TabsList className="w-full mb-4" data-ocid="admin.tab">
                     <TabsTrigger
                       value="agents"
@@ -637,9 +692,17 @@ export function AdminPage() {
                     >
                       Owners ({ownerUsers.length})
                     </TabsTrigger>
+                    {unknownRoleUsers.length > 0 && (
+                      <TabsTrigger
+                        value="all"
+                        className="flex-1"
+                        data-ocid="admin.tab"
+                      >
+                        Other ({unknownRoleUsers.length})
+                      </TabsTrigger>
+                    )}
                   </TabsList>
 
-                  {/* Agents Tab */}
                   <TabsContent value="agents">
                     {agentUsers.length === 0 ? (
                       <div
@@ -665,7 +728,6 @@ export function AdminPage() {
                     )}
                   </TabsContent>
 
-                  {/* Owners Tab */}
                   <TabsContent value="owners">
                     {ownerUsers.length === 0 ? (
                       <div
@@ -690,6 +752,23 @@ export function AdminPage() {
                       </div>
                     )}
                   </TabsContent>
+
+                  {unknownRoleUsers.length > 0 && (
+                    <TabsContent value="all">
+                      <div className="space-y-3">
+                        {unknownRoleUsers.map((user, i) => (
+                          <UserCard
+                            key={user.id}
+                            user={user}
+                            plotCount={plotCountByUserId[user.id] ?? 0}
+                            joinedDate={formatJoinedDate(user.createdAt)}
+                            index={i + 1}
+                            onDelete={handleDeleteUser}
+                          />
+                        ))}
+                      </div>
+                    </TabsContent>
+                  )}
                 </Tabs>
               )}
             </TabsContent>
@@ -720,6 +799,19 @@ function UserCard({
   const contactInfo =
     user.email || user.mobile || user.loginId || "No contact info";
   const isAgent = user.role === "agent";
+  const isOwner = user.role === "owner";
+
+  const badgeClass = isAgent
+    ? "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-100"
+    : isOwner
+      ? "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+      : "bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-100";
+
+  const avatarClass = isAgent
+    ? "bg-blue-100 text-blue-700"
+    : isOwner
+      ? "bg-emerald-100 text-emerald-700"
+      : "bg-gray-100 text-gray-700";
 
   return (
     <Card
@@ -728,44 +820,32 @@ function UserCard({
     >
       <CardContent className="py-4 px-5">
         <div className="flex items-start justify-between gap-4">
-          {/* Left: avatar + details */}
           <div className="flex items-start gap-3 min-w-0">
             <div
-              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
-                isAgent
-                  ? "bg-blue-100 text-blue-700"
-                  : "bg-emerald-100 text-emerald-700"
-              }`}
+              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarClass}`}
             >
               {user.name
                 ? user.name.charAt(0).toUpperCase()
                 : isAgent
                   ? "A"
-                  : "O"}
+                  : isOwner
+                    ? "O"
+                    : "?"}
             </div>
             <div className="min-w-0 flex-1">
-              {/* Name + Role badge */}
               <div className="flex flex-wrap items-center gap-2 mb-1">
                 <p className="text-sm font-semibold text-foreground truncate">
                   {user.name || "—"}
                 </p>
                 <Badge
-                  className={`text-xs px-2 py-0 leading-5 shrink-0 ${
-                    isAgent
-                      ? "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-100"
-                      : "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                  }`}
+                  className={`text-xs px-2 py-0 leading-5 shrink-0 ${badgeClass}`}
                 >
-                  {isAgent ? "Agent" : "Owner"}
+                  {user.role || "unknown"}
                 </Badge>
               </div>
-
-              {/* Email / Phone */}
               <p className="text-xs text-muted-foreground truncate mb-1.5">
                 {contactInfo}
               </p>
-
-              {/* Meta row: plots + joined */}
               <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                 <span
                   className={`font-medium ${
@@ -781,8 +861,6 @@ function UserCard({
               </div>
             </div>
           </div>
-
-          {/* Right: delete button */}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button

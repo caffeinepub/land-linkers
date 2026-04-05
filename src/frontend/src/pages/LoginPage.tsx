@@ -95,7 +95,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         const { auth: firebaseAuth } = await import("../utils/firebase");
         const createdAt = firebaseAuth.currentUser?.metadata?.creationTime;
         onLogin(
-          result.user.role,
+          result.user.role as UserType,
           result.user.name,
           result.user.loginId || loginId.trim(),
           createdAt,

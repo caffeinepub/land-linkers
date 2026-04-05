@@ -1,37 +1,33 @@
 # Land Linkers
 
 ## Current State
-- Admin login at `/admin-portal` works (credentials `admin@J` / `Guru@4473` are validated client-side)
-- Admin session is persisted via `localStorage` (`ll_admin_session`)
-- `AdminPage.tsx` uses Firestore `onSnapshot` on `users` and `plots` collections
-- Firestore rules allow `read: if true` on users/plots — reads should work
-- **Problem 1:** When `admin@J` logs in, no Firestore document is ever created for the admin account with `role: admin`. If the dashboard has any role-check gate that requires this doc, data won't show.
-- **Problem 2:** `onSnapshot` error handler in AdminPage shows an error card but the logic that triggers it may show even when reads succeed if a silent error occurs.
-- **Problem 3:** The `Total Users` count and list depend entirely on `users` collection having documents — if no one has registered yet OR the collection name is wrong, list is empty.
-- **Problem 4:** Admin session on page refresh: admin localStorage session is checked but Firestore read for admin doc could fail if the doc doesn't exist, causing silent re-auth failures.
+Admin Dashboard uses Firestore `onSnapshot` on the `users` collection and filters displayed lists to only show `role === 'agent'` and `role === 'owner'` users. Test accounts created via Firebase Auth get their Firestore documents stored under their Firebase Auth UID. The admin panel may not be seeing these documents if:
+- The user's Firestore document has no `role` field, or it is stored in a different collection than `users`
+- The `ensureAdminDoc` only writes the admin's own record, not the test accounts
+- No console logging exists to diagnose what data is actually being returned
 
 ## Requested Changes (Diff)
 
 ### Add
-- On admin login: immediately write/upsert a Firestore document `users/admin` (or a dedicated `admins/admin`) with `role: "admin"`, name, email, so the admin doc always exists
-- In AdminPage: on mount, attempt to ensure admin doc exists (idempotent setDoc)
-- Show a helpful "No users registered yet" empty state vs a permission error state (distinguish the two cases clearly)
-- Debug info panel (collapsible) showing Firestore connection status
+- Console logging throughout admin data fetch: log total docs returned, each user's id/role/email/name on load
+- Debug diagnostic: on each `onSnapshot` trigger, log `snapshot.docs.length` and each doc's raw data to console
+- `ensureAdminDoc` also creates/updates the two test accounts (Agent & Owner) in Firestore if they don't exist (only if no agent/owner users are found, as a fallback seed)
+- A visible "Debug Info" section in the Admin Dashboard showing raw user count, collection name being queried, and a list of all raw documents with their IDs and role fields
+- `getAllUsersRaw` helper that fetches ALL docs from `users` collection and logs them
 
 ### Modify
-- `App.tsx` `AdminLoginForm` `handleSubmit`: after successful credential check, call `ensureAdminDoc()` to write the admin Firestore record
-- `AdminPage.tsx`: strengthen `onSnapshot` error handling — show specific permission-denied vs network error messages; add a direct "Test Connection" button that does a one-off getDocs to verify Firestore is reachable
-- `AdminPage.tsx`: `Total Users` stat card now shows count of ALL documents in `users` collection (already correct, just needs the data to load)
-- `AdminPage.tsx`: The user list already shows Name, Role, Plot Count, Joined Date — ensure it handles missing `createdAt` and missing `name` fields gracefully with fallbacks
-- Firestore rules displayed in error banner updated to be more permissive on writes (allow any authenticated-looking write to users collection)
+- Admin Dashboard user display: show ALL users from Firestore including those with unrecognized/missing role values (not just 'agent'/'owner') — put unrecognized roles in an "Other" tab or show them alongside
+- The `agentUsers` and `ownerUsers` filters remain but add an "All Users" fallback tab that shows everything when agent+owner lists are both empty
+- `ensureAdminDoc` now also accepts a `seedTestData` flag; when the users collection is empty (besides admin), it writes seed test documents so admin can always see something
 
 ### Remove
-- Nothing to remove
+- Nothing removed
 
 ## Implementation Plan
-1. Add `ensureAdminDoc()` utility to `firebaseStore.ts` — does a `setDoc` with `merge: true` to write `{ role: 'admin', name: 'Admin', email: 'admin@J', createdAt }` to `users/admin-portal-user` doc
-2. Call `ensureAdminDoc()` in `App.tsx` `AdminLoginForm.handleSubmit` after successful credential check
-3. In `AdminPage.tsx` `useEffect` for users: add a fallback — if `onSnapshot` fires with 0 docs AND no error, show a clear "No users registered yet" empty state (not an error)
-4. Improve error messages to distinguish `permission-denied` from network errors
-5. Update Firestore rules block in error banner to be fully open for reads (already is) and allow writes more broadly for the users collection
-6. Ensure admin session check in `App.tsx` is resilient — if `getAdminSession()` returns true, skip all Firestore checks and render AdminPage directly
+1. Update `firebaseStore.ts`: add `getAllUsersDebug()` function that fetches all users and returns raw data with console logging
+2. Update `AdminPage.tsx`:
+   - Add `console.log` calls in both `onSnapshot` callbacks showing total count and each doc's data
+   - Add a debug info card below stats showing: collection name queried, total docs in snapshot, and a raw list of all user docs with id + role + email
+   - Change user tab logic: if both agentUsers and ownerUsers are empty but `users` array has entries (e.g. missing role), show an "All" tab with every non-admin user
+   - Remove the `u.id !== 'admin-portal-user'` filter from `realUserCount` temporarily (or keep it but also show those users) so we can see what's there
+3. Update `ensureAdminDoc` to also write two seed test user documents if no agent/owner users exist

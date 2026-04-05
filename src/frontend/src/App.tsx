@@ -420,6 +420,8 @@ export default function App() {
   }, []);
 
   const logout = async () => {
+    // Capture current user type BEFORE clearing state so redirect is correct
+    const currentType = _userType;
     clearAdminSession();
     await signOutUser();
     clearPhoneSession();
@@ -430,8 +432,11 @@ export default function App() {
     setUserCreatedAt(undefined);
     _userType = null;
     routerRef.current = null;
-    // Replace history so the back button cannot navigate back to the dashboard
-    window.history.replaceState(null, "", "/admin-portal");
+    // Redirect based on who logged out:
+    // - Admin → /admin-portal (their login page)
+    // - Owner / Agent → / (home / user login page)
+    const redirectTo = currentType === "admin" ? "/admin-portal" : "/";
+    window.history.replaceState(null, "", redirectTo);
   };
 
   const handleLogin = (

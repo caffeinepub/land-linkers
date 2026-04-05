@@ -656,13 +656,131 @@ export async function getUsers(): Promise<AppUser[]> {
   }
 }
 
-export async function deleteUser(id: string): Promise<void> {
+/**
+ * Delete a user from Firestore AND attempt to delete their Firebase Auth account.
+ * Phone-number users exist only in Firestore — deleting their doc fully frees the number.
+ * Email users also exist in Firebase Auth; their UID equals the Firestore doc id.
+ * Client-side Firebase SDK can only delete the currently signed-in user, so for
+ * email users we use the Identity Toolkit REST deleteAccount endpoint after
+ * re-signing in with known credentials. When that is not possible the caller
+ * is responsible for removing the Auth entry via Firebase Console.
+ */
+export async function deleteUser(
+  id: string,
+): Promise<{ authDeleted: boolean }> {
+  // 1. Read the user doc first so we know email/password (if stored)
+  let userDoc: AppUser | null = null;
+  try {
+    const snap = await getDoc(doc(db, "users", id));
+    if (snap.exists()) {
+      userDoc = { id: snap.id, ...snap.data() } as AppUser;
+    }
+  } catch {
+    /* proceed without it */
+  }
+
+  // 2. Delete from Firestore (frees phone numbers for Firestore-only accounts)
   try {
     await deleteDoc(doc(db, "users", id));
   } catch {
     const all = lsGetUsers().filter((u) => u.id !== id);
     localStorage.setItem(LS_USERS_KEY, JSON.stringify(all));
   }
+
+  // 3. Delete all plots belonging to this user from Firestore
+  try {
+    const plotsSnap = await getDocs(
+      query(collection(db, "plots"), where("ownerId", "==", id)),
+    );
+    await Promise.allSettled(
+      plotsSnap.docs.map((d) => deleteDoc(doc(db, "plots", d.id))),
+    );
+  } catch {
+    /* non-critical */
+  }
+
+  // 4. Try to delete the Firebase Auth account using REST API
+  // The doc id IS the Firebase Auth UID for email-registered users.
+  // We use the Identity Toolkit accounts:delete endpoint with the admin API key
+  // and a fresh sign-in token obtained from the user's stored credentials.
+  const isEmailUser =
+    userDoc && (userDoc.email || userDoc.loginId?.includes("@"));
+
+  if (isEmailUser && userDoc?.loginId && userDoc?.password) {
+    try {
+      // Sign in as the user to get their idToken, then immediately delete
+      const signInRes = await fetch(
+        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=AIzaSyApjKduIOTIymsqlhyLK_towxY2GeWua4s",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: userDoc.loginId,
+            password: userDoc.password,
+            returnSecureToken: true,
+          }),
+        },
+      );
+      if (signInRes.ok) {
+        const { idToken } = await signInRes.json();
+        const deleteRes = await fetch(
+          "https://identitytoolkit.googleapis.com/v1/accounts:delete?key=AIzaSyApjKduIOTIymsqlhyLK_towxY2GeWua4s",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ idToken }),
+          },
+        );
+        if (deleteRes.ok) return { authDeleted: true };
+      }
+    } catch {
+      /* REST call failed — auth entry remains */
+    }
+  }
+
+  return { authDeleted: false };
+}
+
+/**
+ * Wipe ALL user (non-admin) and plot documents from Firestore, then
+ * recreate the admin record so the admin can still log in.
+ */
+export async function wipeDatabase(): Promise<void> {
+  // Delete all users (non-admin)
+  try {
+    const usersSnap = await getDocs(collection(db, "users"));
+    const nonAdmin = usersSnap.docs.filter(
+      (d) => d.id !== "admin-portal-user" && d.data().role !== "admin",
+    );
+    await Promise.allSettled(
+      nonAdmin.map((d) => deleteDoc(doc(db, "users", d.id))),
+    );
+  } catch {
+    /* ignore */
+  }
+
+  // Delete all plots
+  try {
+    const plotsSnap = await getDocs(collection(db, "plots"));
+    await Promise.allSettled(
+      plotsSnap.docs.map((d) => deleteDoc(doc(db, "plots", d.id))),
+    );
+  } catch {
+    /* ignore */
+  }
+
+  // Delete all plotPhotos
+  try {
+    const photosSnap = await getDocs(collection(db, "plotPhotos"));
+    await Promise.allSettled(
+      photosSnap.docs.map((d) => deleteDoc(doc(db, "plotPhotos", d.id))),
+    );
+  } catch {
+    /* ignore */
+  }
+
+  // Recreate admin record
+  await ensureAdminDoc();
 }
 
 export async function getAgentUsers(): Promise<AppUser[]> {
@@ -684,10 +802,20 @@ export async function assignPlotToAgent(
 /**
  * Ensures the admin has a Firestore document with role: "admin".
  * Called every time admin logs in. Uses merge:true so it's idempotent.
- * Also writes seed test accounts if the users collection has NO agent/owner users yet.
+ * On first call after this deploy, performs a full database wipe of non-admin
+ * users and plots so the admin can start fresh with real data.
  */
 export async function ensureAdminDoc(): Promise<void> {
   try {
+    // ── One-time database wipe on fresh deploy ──────────────────────────────
+    // Runs only once, guarded by a localStorage flag. After the wipe, the
+    // flag is set so subsequent logins skip this step.
+    const wipeFlag = "ll_db_wiped_v1";
+    if (!localStorage.getItem(wipeFlag)) {
+      await wipeDatabase();
+      localStorage.setItem(wipeFlag, "1");
+    }
+
     // 1. Write/update the admin document
     await setDoc(
       doc(db, "users", "admin-portal-user"),
@@ -702,54 +830,21 @@ export async function ensureAdminDoc(): Promise<void> {
       { merge: true },
     );
 
-    // 2. Check how many non-admin users exist
+    // 2. Delete any fake seed documents (Test Owner / Test Agent)
+    const fakeIds = ["seed-test-agent", "seed-test-owner"];
+    await Promise.allSettled(
+      fakeIds.map((id) => deleteDoc(doc(db, "users", id))),
+    );
+
+    // 3. Also scan and delete any doc whose name is "Test Owner" or "Test Agent"
     const snap = await getDocs(collection(db, "users"));
-    const nonAdminDocs = snap.docs.filter(
-      (d) => d.id !== "admin-portal-user" && d.data().role !== "admin",
+    const fakeNames = ["Test Owner", "Test Agent"];
+    const fakeDocs = snap.docs.filter((d) =>
+      fakeNames.includes(d.data().name as string),
     );
-
-    console.log(
-      `[Admin] users collection: ${snap.docs.length} total docs, ${nonAdminDocs.length} non-admin users`,
+    await Promise.allSettled(
+      fakeDocs.map((d) => deleteDoc(doc(db, "users", d.id))),
     );
-    for (const d of snap.docs) {
-      console.log(
-        `[Admin] doc: id=${d.id}, role=${d.data().role}, email=${d.data().email || d.data().loginId || "—"}, name=${d.data().name || "—"}`,
-      );
-    }
-
-    // 3. If NO non-admin users found, write seed test accounts so admin panel is not empty
-    if (nonAdminDocs.length === 0) {
-      console.log(
-        "[Admin] No users found in Firestore — creating seed test accounts",
-      );
-      await setDoc(
-        doc(db, "users", "seed-test-agent"),
-        {
-          name: "Test Agent",
-          email: "agent@test.com",
-          loginId: "agent@test.com",
-          mobile: "",
-          role: "agent",
-          lastLogin: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-        },
-        { merge: true },
-      );
-      await setDoc(
-        doc(db, "users", "seed-test-owner"),
-        {
-          name: "Test Owner",
-          email: "owner@test.com",
-          loginId: "owner@test.com",
-          mobile: "",
-          role: "owner",
-          lastLogin: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-        },
-        { merge: true },
-      );
-      console.log("[Admin] Seed test accounts written to Firestore");
-    }
   } catch (err) {
     console.error("[Admin] ensureAdminDoc error:", err);
     // Firestore might be unreachable — not critical for admin login

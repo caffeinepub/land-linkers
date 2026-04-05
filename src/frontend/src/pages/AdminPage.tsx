@@ -179,10 +179,14 @@ export function AdminPage() {
 
   const handleDeleteUser = async (userId: string) => {
     try {
-      await deleteUser(userId);
-      toast.success(
-        "User removed from database. To also remove their login access, delete them from Firebase Console → Authentication.",
-      );
+      const result = await deleteUser(userId);
+      if (result.authDeleted) {
+        toast.success("User fully deleted from database and login system.");
+      } else {
+        toast.success(
+          "User removed from database. Phone number is now free to reuse. For email accounts, also remove from Firebase Console → Authentication if needed.",
+        );
+      }
     } catch {
       toast.error("Failed to delete user.");
     }
@@ -668,9 +672,9 @@ function UserCard({ user, plotCount, joinedDate, onDelete }: UserCardProps) {
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete this user?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will permanently remove the user&apos;s record from the
-                  database. To also remove their login access, delete them from
-                  Firebase Console → Authentication.
+                  This will permanently remove the user from the database and
+                  free their phone number for reuse. For email accounts, their
+                  login access will also be removed automatically if possible.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

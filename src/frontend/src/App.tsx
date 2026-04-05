@@ -422,6 +422,7 @@ export default function App() {
   const logout = async () => {
     clearAdminSession();
     await signOutUser();
+    clearPhoneSession();
     setIsLoggedIn(false);
     setUserType(null);
     setUserName(undefined);
@@ -429,6 +430,8 @@ export default function App() {
     setUserCreatedAt(undefined);
     _userType = null;
     routerRef.current = null;
+    // Replace history so the back button cannot navigate back to the dashboard
+    window.history.replaceState(null, "", "/admin-portal");
   };
 
   const handleLogin = (

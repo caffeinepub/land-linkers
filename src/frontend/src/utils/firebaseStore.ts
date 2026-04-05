@@ -676,3 +676,26 @@ export async function assignPlotToAgent(
 ): Promise<string> {
   return saveListing(listing);
 }
+
+/**
+ * Ensures the admin has a Firestore document with role: "admin".
+ * Called every time admin logs in. Uses merge:true so it's idempotent.
+ */
+export async function ensureAdminDoc(): Promise<void> {
+  try {
+    await setDoc(
+      doc(db, "users", "admin-portal-user"),
+      {
+        name: "Admin",
+        email: "admin@J",
+        loginId: "admin@J",
+        role: "admin",
+        lastLogin: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      { merge: true },
+    );
+  } catch {
+    // Firestore might be unreachable — not critical for admin login
+  }
+}

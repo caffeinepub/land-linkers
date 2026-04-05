@@ -21,7 +21,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
 import type { FirestoreError } from "firebase/firestore";
 import {
   AlertTriangle,
@@ -53,17 +53,17 @@ const NEW_LOGO = "/assets/image-019d4503-4266-7396-af3a-623deafe0238.png";
 const CORRECT_FIRESTORE_RULES = `rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
     match /plots/{plotId} {
       allow read: if true;
-      allow write: if request.resource.data.keys().hasAny(['ownerName', 'status', 'addedBy']);
+      allow write: if true;
     }
     match /plotPhotos/{photoId} {
       allow read: if true;
-      allow write: if request.resource.data.keys().hasAll(['photos']);
-    }
-    match /users/{userId} {
-      allow read: if true;
-      allow write: if request.resource.data.keys().hasAny(['role', 'lastLogin', 'name', 'loginId', 'email', 'mobile', 'password', 'createdAt']);
+      allow write: if true;
     }
     match /{document=**} {
       allow read, write: if false;
@@ -86,6 +86,23 @@ export function AdminPage() {
     setLoading(true);
     setRetryKey((k) => k + 1);
   }, []);
+
+  // One-time connectivity check on mount — quickly surfaces permission-denied errors
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryKey is intentional trigger
+  useEffect(() => {
+    getDoc(doc(db, "users", "admin-portal-user"))
+      .then(() => {
+        // Firestore is reachable — no action needed
+      })
+      .catch((err: FirestoreError) => {
+        if (err.code === "permission-denied") {
+          setError(
+            "Permission denied: Your Firestore Security Rules are blocking reads. Update the rules in Firebase Console → Firestore → Rules using the template below.",
+          );
+          setLoading(false);
+        }
+      });
+  }, [retryKey]);
 
   // Real-time users listener
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryKey is intentional trigger
@@ -224,18 +241,32 @@ export function AdminPage() {
     }
   };
 
-  // Sorted filtered lists
+  // Sorted filtered lists — exclude admin-portal-user from displayed lists
   const agentUsers = useMemo(() => {
-    return [...users.filter((u) => u.role === "agent")].sort(
+    return [
+      ...users.filter(
+        (u) => u.role === "agent" && u.id !== "admin-portal-user",
+      ),
+    ].sort(
       (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
     );
   }, [users, plotCountByUserId]);
 
   const ownerUsers = useMemo(() => {
-    return [...users.filter((u) => u.role === "owner")].sort(
+    return [
+      ...users.filter(
+        (u) => u.role === "owner" && u.id !== "admin-portal-user",
+      ),
+    ].sort(
       (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
     );
   }, [users, plotCountByUserId]);
+
+  // Total real users count (excluding the admin doc)
+  const realUserCount = useMemo(
+    () => users.filter((u) => u.id !== "admin-portal-user").length,
+    [users],
+  );
 
   return (
     <main className="bg-background min-h-screen">
@@ -342,7 +373,7 @@ export function AdminPage() {
                 </div>
                 <div>
                   <div className="font-serif font-bold text-2xl text-foreground">
-                    {users.length}
+                    {realUserCount}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     Total Users
@@ -381,7 +412,7 @@ export function AdminPage() {
                 className="flex-1"
                 data-ocid="admin.tab"
               >
-                Manage Users ({users.length})
+                Manage Users ({realUserCount})
               </TabsTrigger>
             </TabsList>
 
@@ -576,6 +607,19 @@ export function AdminPage() {
                     <Skeleton key={i} className="h-24 w-full rounded-xl" />
                   ))}
                 </div>
+              ) : agentUsers.length === 0 &&
+                ownerUsers.length === 0 &&
+                !error ? (
+                <div
+                  className="text-center py-16 text-muted-foreground"
+                  data-ocid="admin.empty_state"
+                >
+                  <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">No users registered yet.</p>
+                  <p className="text-xs mt-1 opacity-70">
+                    Users will appear here once they sign up through the app.
+                  </p>
+                </div>
               ) : (
                 <Tabs defaultValue="agents">
                   <TabsList className="w-full mb-4" data-ocid="admin.tab">
@@ -603,7 +647,7 @@ export function AdminPage() {
                         data-ocid="admin.empty_state"
                       >
                         <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                        <p>No agents found.</p>
+                        <p>No agents registered yet.</p>
                       </div>
                     ) : (
                       <div className="space-y-3">
@@ -629,7 +673,7 @@ export function AdminPage() {
                         data-ocid="admin.empty_state"
                       >
                         <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                        <p>No owners found.</p>
+                        <p>No owners registered yet.</p>
                       </div>
                     ) : (
                       <div className="space-y-3">

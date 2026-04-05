@@ -32,6 +32,7 @@ import { ProfilePage } from "./pages/ProfilePage";
 import { auth, db } from "./utils/firebase";
 import {
   clearPhoneSession,
+  ensureAdminDoc,
   getCachedUserRole,
   getPhoneSession,
   signOutUser,
@@ -186,10 +187,12 @@ function AdminLoginForm({
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
       saveAdminSession();
+      // Write admin Firestore doc so role: "admin" always exists
+      await ensureAdminDoc();
       onLogin("admin", "Admin");
     } else {
       setError("Invalid admin credentials. Please try again.");
@@ -354,6 +357,8 @@ export default function App() {
       setUserLoginId(ADMIN_EMAIL);
       setIsLoggedIn(true);
       setAuthChecking(false);
+      // Re-write admin doc on every refresh so role:admin is always in Firestore
+      ensureAdminDoc();
       return;
     }
 

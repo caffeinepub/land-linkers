@@ -28,6 +28,7 @@ import {
   CalendarDays,
   CheckCircle,
   ImageIcon,
+  LogOut,
   MapPin,
   RefreshCw,
   Shield,
@@ -37,6 +38,7 @@ import {
 import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useAuth } from "../context/AuthContext";
 import { db } from "../utils/firebase";
 import type { AppUser, PlotListing } from "../utils/firebaseStore";
 import {
@@ -70,6 +72,7 @@ service cloud.firestore {
 }`;
 
 export function AdminPage() {
+  const { onLogout } = useAuth();
   const [plots, setPlots] = useState<PlotListing[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -273,6 +276,15 @@ export function AdminPage() {
                 </p>
               </div>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onLogout}
+              className="gap-2 shrink-0 text-muted-foreground hover:text-destructive hover:border-destructive/40"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout
+            </Button>
           </div>
 
           {/* ── Error Banner ── */}

@@ -42,6 +42,35 @@ const ADMIN_EMAIL = "admin@J";
 const ADMIN_PASSWORD = "Guru@4473";
 const NEW_LOGO = "/assets/image-019d4503-4266-7396-af3a-623deafe0238.png";
 
+// ─── Admin session persistence ───────────────────────────────────────────────
+const LS_ADMIN_SESSION = "ll_admin_session";
+
+function saveAdminSession() {
+  localStorage.setItem(
+    LS_ADMIN_SESSION,
+    JSON.stringify({ role: "admin", ts: Date.now() }),
+  );
+}
+
+function getAdminSession(): boolean {
+  try {
+    const raw = localStorage.getItem(LS_ADMIN_SESSION);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    // Admin sessions last 7 days
+    return (
+      parsed.role === "admin" &&
+      Date.now() - parsed.ts < 7 * 24 * 60 * 60 * 1000
+    );
+  } catch {
+    return false;
+  }
+}
+
+function clearAdminSession() {
+  localStorage.removeItem(LS_ADMIN_SESSION);
+}
+
 let _userType: UserType | null = null;
 
 function buildRouter(userType: UserType | null) {
@@ -160,6 +189,7 @@ function AdminLoginForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+      saveAdminSession();
       onLogin("admin", "Admin");
     } else {
       setError("Invalid admin credentials. Please try again.");
@@ -315,6 +345,18 @@ export default function App() {
   useEffect(() => {
     let resolved = false;
 
+    // ── Check for persisted admin session first ──────────────────────────────
+    if (getAdminSession()) {
+      _userType = "admin";
+      routerRef.current = buildRouter("admin");
+      setUserType("admin");
+      setUserName("Admin");
+      setUserLoginId(ADMIN_EMAIL);
+      setIsLoggedIn(true);
+      setAuthChecking(false);
+      return;
+    }
+
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (resolved) return; // only run once on initial load
       resolved = true;
@@ -373,6 +415,7 @@ export default function App() {
   }, []);
 
   const logout = async () => {
+    clearAdminSession();
     await signOutUser();
     setIsLoggedIn(false);
     setUserType(null);

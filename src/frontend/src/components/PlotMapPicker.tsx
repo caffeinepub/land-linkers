@@ -170,12 +170,12 @@ export default function PlotMapPicker({
       <div
         ref={containerRef}
         className="rounded-xl overflow-hidden border border-border"
-        style={{ height: "350px", width: "100%", position: "relative" }}
+        style={{ height: "250px", width: "100%", position: "relative" }}
       >
         <MapContainer
           center={center}
           zoom={16}
-          style={{ height: "350px", width: "100%" }}
+          style={{ height: "250px", width: "100%" }}
           ref={(map) => {
             if (map) mapInstanceRef.current = map;
           }}

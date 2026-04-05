@@ -629,7 +629,7 @@ export function OwnerPage() {
                         {isGeocoding ? "Searching..." : "Search on Map"}
                       </Button>
                     </div>
-                    <div className="mt-3" style={{ height: "350px" }}>
+                    <div className="mt-3" style={{ height: "250px" }}>
                       <PlotMapPicker
                         center={mapCenter}
                         pinnedCoords={savedCoords}

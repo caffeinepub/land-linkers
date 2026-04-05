@@ -56,6 +56,7 @@ export interface AppUser {
   password?: string;
   role: "owner" | "agent";
   lastLogin: string;
+  createdAt?: string;
 }
 
 // ─── Session cache key for phone users ───────────────────────────────────────
@@ -106,6 +107,17 @@ export function clearPhoneSession() {
 const LS_KEY = "ll_listings";
 const LS_PHOTOS_PREFIX = "ll_photos_";
 const LS_USERS_KEY = "ll_users";
+const LS_ROLE_KEY = "ll_user_role";
+
+// Cache the user role locally so session restore can use it when Firestore is unavailable
+export function cacheUserRole(role: "owner" | "agent") {
+  localStorage.setItem(LS_ROLE_KEY, role);
+}
+
+export function getCachedUserRole(): "owner" | "agent" | null {
+  const r = localStorage.getItem(LS_ROLE_KEY);
+  return r === "owner" || r === "agent" ? r : null;
+}
 
 function lsGetListings(): PlotListing[] {
   try {
@@ -349,6 +361,7 @@ export async function registerUser(params: {
       };
 
       await setDoc(doc(db, "users", uid), profileData);
+      cacheUserRole(params.role);
       return { success: true };
     } catch (error: unknown) {
       const code = (error as { code?: string })?.code;
@@ -394,6 +407,7 @@ async function registerUserToFirestore(params: {
     password: params.password,
     role: params.role,
     lastLogin: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   };
 
   try {
@@ -466,6 +480,7 @@ export async function loginUser(
           updateDoc(doc(db, "users", uid), {
             lastLogin: new Date().toISOString(),
           }).catch(() => {});
+          cacheUserRole(user.role);
           return { status: "success", user };
         }
       } catch {
@@ -493,6 +508,7 @@ export async function loginUser(
             lastLogin: new Date().toISOString(),
           }).catch(() => {});
 
+          cacheUserRole(user.role);
           return { status: "success", user };
         }
       } catch {
@@ -500,21 +516,22 @@ export async function loginUser(
       }
 
       // No profile found anywhere — create a minimal one
-      // Default to "owner" only if we truly cannot determine the role
+      // Use cached role if available, otherwise default to owner
+      const cachedRole = getCachedUserRole() ?? "owner";
       const minimalUser: AppUser = {
         id: uid,
         loginId,
         email: loginId,
-        role: "owner",
+        role: cachedRole,
         lastLogin: new Date().toISOString(),
       };
       setDoc(doc(db, "users", uid), {
         loginId,
         email: loginId,
-        role: "owner",
+        role: cachedRole,
         lastLogin: new Date().toISOString(),
       }).catch(() => {});
-
+      cacheUserRole(cachedRole);
       return { status: "success", user: minimalUser };
     } catch (error: unknown) {
       const code = (error as { code?: string })?.code;
@@ -574,6 +591,8 @@ async function loginUserFromFirestore(
     updateDoc(doc(db, "users", user.id), {
       lastLogin: new Date().toISOString(),
     }).catch(() => {});
+
+    cacheUserRole(user.role);
 
     // Silently migrate legacy email user to Firebase Auth
     if (tryMigrateToFirebaseAuth && loginId.includes("@")) {

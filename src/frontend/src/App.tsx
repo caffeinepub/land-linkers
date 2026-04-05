@@ -32,6 +32,7 @@ import { ProfilePage } from "./pages/ProfilePage";
 import { auth, db } from "./utils/firebase";
 import {
   clearPhoneSession,
+  getCachedUserRole,
   getPhoneSession,
   signOutUser,
 } from "./utils/firebaseStore";
@@ -340,14 +341,12 @@ export default function App() {
           return;
         }
 
-        // Firestore profile missing (e.g. profile write failed during signup,
-        // or Firestore rules blocking the read). Firebase Auth session IS valid,
-        // so we restore the session with a safe default role and show the user in.
-        // They can still use the app; their dashboard will be limited until profile
-        // is synced.
-        _userType = "owner";
-        routerRef.current = buildRouter("owner");
-        setUserType("owner");
+        // Firestore profile missing — use cached role (set during login) so agents
+        // are not wrongly defaulted to owner role.
+        const fallbackRole = getCachedUserRole() ?? "owner";
+        _userType = fallbackRole;
+        routerRef.current = buildRouter(fallbackRole);
+        setUserType(fallbackRole);
         setUserName(email);
         setUserLoginId(email);
         setUserCreatedAt(createdAt);
@@ -392,7 +391,14 @@ export default function App() {
   ) => {
     _userType = type;
     routerRef.current = buildRouter(type);
-    const destination = type === "admin" ? "/admin-portal" : "/";
+    const destination =
+      type === "admin"
+        ? "/admin-portal"
+        : type === "agent"
+          ? "/agent"
+          : type === "owner"
+            ? "/owner"
+            : "/";
     routerRef.current.navigate({ to: destination });
     setUserType(type);
     setUserName(name);

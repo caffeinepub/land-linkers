@@ -579,7 +579,7 @@ export function AgentPage() {
                         {isLocationGeocoding ? "..." : "Search"}
                       </Button>
                     </div>
-                    <div className="mt-3" style={{ height: "280px" }}>
+                    <div className="mt-3" style={{ height: "250px" }}>
                       <PlotMapPicker
                         center={locationMapCenter}
                         pinnedCoords={locationSavedCoords}

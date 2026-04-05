@@ -23,16 +23,16 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { collection, onSnapshot } from "firebase/firestore";
 import {
+  CalendarDays,
   CheckCircle,
   ImageIcon,
   MapPin,
-  RefreshCw,
   Shield,
   Trash2,
   Users,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { db } from "../utils/firebase";
 import type { AppUser, PlotListing } from "../utils/firebaseStore";
@@ -40,9 +40,10 @@ import {
   deleteListing,
   deletePlotPhotos,
   deleteUser,
-  getListings,
   verifyListing,
 } from "../utils/firebaseStore";
+
+const NEW_LOGO = "/assets/image-019d4503-4266-7396-af3a-623deafe0238.png";
 
 export function AdminPage() {
   const [plots, setPlots] = useState<PlotListing[]>([]);
@@ -71,23 +72,48 @@ export function AdminPage() {
     return () => unsub();
   }, []);
 
-  // Load plots once and poll
-  const loadPlots = useCallback(async (showLoading = false) => {
-    try {
-      const plotData = await getListings();
-      setPlots(plotData);
-      if (showLoading) setLoading(false);
-    } catch {
-      toast.error("Failed to load plots.");
-      if (showLoading) setLoading(false);
-    }
+  // Real-time plots listener (replaces polling interval)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, "plots"),
+      (snapshot) => {
+        const plotData = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as PlotListing[];
+        setPlots(plotData);
+      },
+      () => {
+        toast.error("Failed to load plots.");
+      },
+    );
+    return () => unsub();
   }, []);
 
-  useEffect(() => {
-    loadPlots(true);
-    const interval = setInterval(() => loadPlots(false), 30000);
-    return () => clearInterval(interval);
-  }, [loadPlots]);
+  // Compute plot counts per user — keyed by user ID, with email/mobile fallback
+  const plotCountByUserId = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const plot of plots) {
+      // Primary: match by ownerId (Firestore UID)
+      if (plot.ownerId) {
+        counts[plot.ownerId] = (counts[plot.ownerId] ?? 0) + 1;
+        continue;
+      }
+      // Fallback: match by ownerEmail against user email / loginId / mobile
+      if (plot.ownerEmail) {
+        const matchedUser = users.find(
+          (u) =>
+            (u.email && u.email === plot.ownerEmail) ||
+            (u.loginId && u.loginId === plot.ownerEmail) ||
+            (u.mobile && u.mobile === plot.ownerEmail),
+        );
+        if (matchedUser) {
+          counts[matchedUser.id] = (counts[matchedUser.id] ?? 0) + 1;
+        }
+      }
+    }
+    return counts;
+  }, [plots, users]);
 
   const handleDeletePlot = async (plot: PlotListing) => {
     setDeletingId(plot.id);
@@ -96,7 +122,6 @@ export function AdminPage() {
         deleteListing(plot.id),
         deletePlotPhotos(plot.id, plot.photoUrls || []),
       ]);
-      setPlots((prev) => prev.filter((p) => p.id !== plot.id));
       toast.success("Plot deleted permanently.");
     } catch {
       toast.error("Failed to delete plot.");
@@ -109,11 +134,6 @@ export function AdminPage() {
     setTogglingId(plot.id);
     try {
       await verifyListing(plot.id, !plot.verified);
-      setPlots((prev) =>
-        prev.map((p) =>
-          p.id === plot.id ? { ...p, verified: !p.verified } : p,
-        ),
-      );
       toast.success(
         plot.verified ? "Verification removed." : "Plot marked as verified!",
       );
@@ -129,12 +149,38 @@ export function AdminPage() {
       await deleteUser(userId);
       // users state will auto-update via onSnapshot
       toast.success(
-        "User removed from database. To fully delete their login, go to Firebase Console → Authentication.",
+        "User removed from database. To also remove their login access, delete them from Firebase Console → Authentication.",
       );
     } catch {
       toast.error("Failed to delete user.");
     }
   };
+
+  // Format joined date from createdAt field
+  const formatJoinedDate = (createdAt?: string): string => {
+    if (!createdAt) return "—";
+    try {
+      return new Date(createdAt).toLocaleDateString("en-US", {
+        month: "short",
+        year: "numeric",
+      });
+    } catch {
+      return "—";
+    }
+  };
+
+  // Sorted filtered lists
+  const agentUsers = useMemo(() => {
+    return [...users.filter((u) => u.role === "agent")].sort(
+      (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
+    );
+  }, [users, plotCountByUserId]);
+
+  const ownerUsers = useMemo(() => {
+    return [...users.filter((u) => u.role === "owner")].sort(
+      (a, b) => (plotCountByUserId[b.id] ?? 0) - (plotCountByUserId[a.id] ?? 0),
+    );
+  }, [users, plotCountByUserId]);
 
   return (
     <main className="bg-background min-h-screen">
@@ -144,32 +190,36 @@ export function AdminPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          {/* Admin Header */}
+          {/* Admin Header with logo & branding */}
           <div className="flex items-center justify-between gap-4 mb-8">
             <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                <Shield className="w-6 h-6 text-primary" />
+              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center overflow-hidden shrink-0">
+                <img
+                  src={NEW_LOGO}
+                  alt="Land Linkers logo"
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display =
+                      "none";
+                    (e.currentTarget.parentElement as HTMLElement).innerHTML =
+                      '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
+                  }}
+                />
               </div>
               <div>
-                <h1 className="font-serif font-bold text-3xl text-foreground">
-                  Admin Dashboard
-                </h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="font-serif font-bold text-3xl text-foreground">
+                    Admin Dashboard
+                  </h1>
+                  <Shield className="w-5 h-5 text-primary opacity-60" />
+                </div>
                 <p className="text-muted-foreground text-sm">
                   Manage users and plot listings
                 </p>
+                <p className="text-xs text-muted-foreground/60 italic mt-0.5">
+                  Connecting Spaces
+                </p>
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5"
-                onClick={() => loadPlots(false)}
-                data-ocid="admin.secondary_button"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Refresh
-              </Button>
             </div>
           </div>
 
@@ -413,7 +463,7 @@ export function AdminPage() {
               {loading ? (
                 <div className="space-y-3" data-ocid="admin.loading_state">
                   {[1, 2, 3].map((i) => (
-                    <Skeleton key={i} className="h-16 w-full rounded-xl" />
+                    <Skeleton key={i} className="h-24 w-full rounded-xl" />
                   ))}
                 </div>
               ) : (
@@ -424,107 +474,68 @@ export function AdminPage() {
                       className="flex-1"
                       data-ocid="admin.tab"
                     >
-                      Agents ({users.filter((u) => u.role === "agent").length})
+                      Agents ({agentUsers.length})
                     </TabsTrigger>
                     <TabsTrigger
                       value="owners"
                       className="flex-1"
                       data-ocid="admin.tab"
                     >
-                      Owners ({users.filter((u) => u.role === "owner").length})
+                      Owners ({ownerUsers.length})
                     </TabsTrigger>
                   </TabsList>
-                  {(["agents", "owners"] as const).map((tab) => {
-                    const role = tab === "agents" ? "agent" : "owner";
-                    const filtered = users.filter((u) => u.role === role);
-                    return (
-                      <TabsContent key={tab} value={tab}>
-                        {filtered.length === 0 ? (
-                          <div
-                            className="text-center py-12 text-muted-foreground"
-                            data-ocid="admin.empty_state"
-                          >
-                            <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                            <p>No {tab} found.</p>
-                          </div>
-                        ) : (
-                          <div className="space-y-3">
-                            {filtered.map((user, i) => (
-                              <Card
-                                key={user.id}
-                                data-ocid={`admin.item.${i + 1}`}
-                              >
-                                <CardContent className="py-4 px-5 flex items-center justify-between gap-4">
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary shrink-0">
-                                      {user.role === "owner" ? "🏠" : "🤝"}
-                                    </div>
-                                    <div>
-                                      <p className="text-sm font-semibold text-foreground">
-                                        {user.name || "—"}
-                                      </p>
-                                      <p className="text-xs text-muted-foreground">
-                                        {user.email ||
-                                          user.mobile ||
-                                          user.loginId ||
-                                          "No contact info"}
-                                      </p>
-                                      <p className="text-xs text-muted-foreground capitalize">
-                                        {user.role} ·{" "}
-                                        {user.lastLogin
-                                          ? `Last login: ${new Date(user.lastLogin).toLocaleDateString()}`
-                                          : "Never logged in"}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <AlertDialog>
-                                    <AlertDialogTrigger asChild>
-                                      <Button
-                                        variant="destructive"
-                                        size="sm"
-                                        className="gap-1.5 shrink-0"
-                                        data-ocid={`admin.delete_button.${i + 1}`}
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                        Delete
-                                      </Button>
-                                    </AlertDialogTrigger>
-                                    <AlertDialogContent data-ocid="admin.dialog">
-                                      <AlertDialogHeader>
-                                        <AlertDialogTitle>
-                                          Delete this user?
-                                        </AlertDialogTitle>
-                                        <AlertDialogDescription>
-                                          This will permanently remove the user
-                                          record from the database. Their plot
-                                          listings will remain unless deleted
-                                          separately.
-                                        </AlertDialogDescription>
-                                      </AlertDialogHeader>
-                                      <AlertDialogFooter>
-                                        <AlertDialogCancel data-ocid="admin.cancel_button">
-                                          Cancel
-                                        </AlertDialogCancel>
-                                        <AlertDialogAction
-                                          onClick={() =>
-                                            handleDeleteUser(user.id)
-                                          }
-                                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                          data-ocid="admin.confirm_button"
-                                        >
-                                          Yes, Delete
-                                        </AlertDialogAction>
-                                      </AlertDialogFooter>
-                                    </AlertDialogContent>
-                                  </AlertDialog>
-                                </CardContent>
-                              </Card>
-                            ))}
-                          </div>
-                        )}
-                      </TabsContent>
-                    );
-                  })}
+
+                  {/* Agents Tab */}
+                  <TabsContent value="agents">
+                    {agentUsers.length === 0 ? (
+                      <div
+                        className="text-center py-12 text-muted-foreground"
+                        data-ocid="admin.empty_state"
+                      >
+                        <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                        <p>No agents found.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {agentUsers.map((user, i) => (
+                          <UserCard
+                            key={user.id}
+                            user={user}
+                            plotCount={plotCountByUserId[user.id] ?? 0}
+                            joinedDate={formatJoinedDate(user.createdAt)}
+                            index={i + 1}
+                            onDelete={handleDeleteUser}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  {/* Owners Tab */}
+                  <TabsContent value="owners">
+                    {ownerUsers.length === 0 ? (
+                      <div
+                        className="text-center py-12 text-muted-foreground"
+                        data-ocid="admin.empty_state"
+                      >
+                        <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                        <p>No owners found.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {ownerUsers.map((user, i) => (
+                          <UserCard
+                            key={user.id}
+                            user={user}
+                            plotCount={plotCountByUserId[user.id] ?? 0}
+                            joinedDate={formatJoinedDate(user.createdAt)}
+                            index={i + 1}
+                            onDelete={handleDeleteUser}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </TabsContent>
                 </Tabs>
               )}
             </TabsContent>
@@ -532,5 +543,128 @@ export function AdminPage() {
         </motion.div>
       </div>
     </main>
+  );
+}
+
+// ─── UserCard sub-component ───────────────────────────────────────────────────
+
+interface UserCardProps {
+  user: AppUser;
+  plotCount: number;
+  joinedDate: string;
+  index: number;
+  onDelete: (userId: string) => void;
+}
+
+function UserCard({
+  user,
+  plotCount,
+  joinedDate,
+  index,
+  onDelete,
+}: UserCardProps) {
+  const contactInfo =
+    user.email || user.mobile || user.loginId || "No contact info";
+  const isAgent = user.role === "agent";
+
+  return (
+    <Card
+      data-ocid={`admin.item.${index}`}
+      className="overflow-hidden border border-border/60 hover:border-border transition-colors"
+    >
+      <CardContent className="py-4 px-5">
+        <div className="flex items-start justify-between gap-4">
+          {/* Left: avatar + details */}
+          <div className="flex items-start gap-3 min-w-0">
+            <div
+              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
+                isAgent
+                  ? "bg-blue-100 text-blue-700"
+                  : "bg-emerald-100 text-emerald-700"
+              }`}
+            >
+              {user.name
+                ? user.name.charAt(0).toUpperCase()
+                : isAgent
+                  ? "A"
+                  : "O"}
+            </div>
+            <div className="min-w-0 flex-1">
+              {/* Name + Role badge */}
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                <p className="text-sm font-semibold text-foreground truncate">
+                  {user.name || "—"}
+                </p>
+                <Badge
+                  className={`text-xs px-2 py-0 leading-5 shrink-0 ${
+                    isAgent
+                      ? "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-100"
+                      : "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                  }`}
+                >
+                  {isAgent ? "Agent" : "Owner"}
+                </Badge>
+              </div>
+
+              {/* Email / Phone */}
+              <p className="text-xs text-muted-foreground truncate mb-1.5">
+                {contactInfo}
+              </p>
+
+              {/* Meta row: plots + joined */}
+              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                <span
+                  className={`font-medium ${
+                    plotCount > 0 ? "text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  Plots: {plotCount}
+                </span>
+                <span className="flex items-center gap-1">
+                  <CalendarDays className="w-3 h-3" />
+                  Joined {joinedDate}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: delete button */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                data-ocid={`admin.delete_button.${index}`}
+              >
+                <Trash2 className="w-4 h-4" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent data-ocid="admin.dialog">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete this user?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently remove the user&apos;s record from the
+                  database. To also remove their login access, delete them from
+                  Firebase Console → Authentication.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel data-ocid="admin.cancel_button">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => onDelete(user.id)}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  data-ocid="admin.confirm_button"
+                >
+                  Yes, Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

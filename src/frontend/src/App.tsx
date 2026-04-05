@@ -329,20 +329,25 @@ export default function App() {
   );
   // true while we are checking for a persisted session on first load
   const [authChecking, setAuthChecking] = useState(true);
-  // Splash screen states
-  const [showSplash, setShowSplash] = useState(true);
+  // Splash screen: only show once per browser session (not on every reload)
+  const [showSplash, setShowSplash] = useState(() => {
+    if (sessionStorage.getItem("ll_splash_shown")) return false;
+    sessionStorage.setItem("ll_splash_shown", "1");
+    return true;
+  });
   const [splashFading, setSplashFading] = useState(false);
   const routerRef = useRef<ReturnType<typeof buildRouter> | null>(null);
 
-  // Splash screen timer — always show for 4.5s then fade out
+  // Splash screen timer — only runs when splash is actually shown
   useEffect(() => {
+    if (!showSplash) return;
     const fadeTimer = setTimeout(() => setSplashFading(true), 4500);
     const hideTimer = setTimeout(() => setShowSplash(false), 5000);
     return () => {
       clearTimeout(fadeTimer);
       clearTimeout(hideTimer);
     };
-  }, []);
+  }, [showSplash]);
 
   // Restore persisted session on mount (runs once)
   useEffect(() => {
@@ -446,7 +451,14 @@ export default function App() {
     createdAt?: string,
   ) => {
     _userType = type;
-    routerRef.current = buildRouter(type);
+    const newRouter = buildRouter(type);
+    routerRef.current = newRouter;
+    setUserType(type);
+    setUserName(name);
+    setUserLoginId(loginId);
+    setUserCreatedAt(createdAt);
+    setIsLoggedIn(true);
+    // Navigate after a microtask so React state flushes first — no full reload
     const destination =
       type === "admin"
         ? "/admin-portal"
@@ -455,15 +467,12 @@ export default function App() {
           : type === "owner"
             ? "/owner"
             : "/";
-    routerRef.current.navigate({ to: destination });
-    setUserType(type);
-    setUserName(name);
-    setUserLoginId(loginId);
-    setUserCreatedAt(createdAt);
-    setIsLoggedIn(true);
+    setTimeout(() => {
+      newRouter.navigate({ to: destination });
+    }, 0);
   };
 
-  // Always show splash for the first 5 seconds
+  // Show splash screen only on the very first load of the browser session
   if (showSplash) {
     return (
       <div

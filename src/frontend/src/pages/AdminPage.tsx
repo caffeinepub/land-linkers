@@ -11,7 +11,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  type CardHeader,
+  type CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +57,7 @@ export function AdminPage() {
   const { onLogout } = useAuth();
 
   // ── Strict login wall ──────────────────────────────────────────────────────
+  // Read session once on mount — no useEffect that triggers reloads
   const [isAdminAuth] = useState(() => {
     try {
       const raw = localStorage.getItem("ll_admin_session");
@@ -72,15 +78,9 @@ export function AdminPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
-  // Redirect to login if not authenticated
-  useEffect(() => {
-    if (!isAdminAuth) {
-      window.location.replace("/admin-portal");
-    }
-  }, [isAdminAuth]);
-
   // ── Real-time users listener ──────────────────────────────────────────────
   useEffect(() => {
+    if (!isAdminAuth) return;
     const unsub = onSnapshot(
       collection(db, "users"),
       (snapshot) => {
@@ -101,10 +101,11 @@ export function AdminPage() {
       },
     );
     return () => unsub();
-  }, []);
+  }, [isAdminAuth]);
 
   // ── Real-time plots listener ──────────────────────────────────────────────
   useEffect(() => {
+    if (!isAdminAuth) return;
     const unsub = onSnapshot(
       collection(db, "plots"),
       (snapshot) => {
@@ -124,7 +125,7 @@ export function AdminPage() {
       },
     );
     return () => unsub();
-  }, []);
+  }, [isAdminAuth]);
 
   const plotCountByUserId = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -229,7 +230,8 @@ export function AdminPage() {
 
   const realUserCount = allRealUsers.length;
 
-  // Render nothing while redirect is in progress
+  // If not authenticated, render nothing — App.tsx router already guards this route.
+  // No useEffect redirect here to avoid reload loops.
   if (!isAdminAuth) return null;
 
   return (
@@ -696,3 +698,6 @@ function UserCard({ user, plotCount, joinedDate, onDelete }: UserCardProps) {
 
 // Keep Dialog import used elsewhere (photo slideshow integration guard)
 export { Dialog, DialogContent, DialogHeader, DialogTitle };
+
+// Suppress unused import warnings for CardHeader/CardTitle (used by parent consumers)
+export type { CardHeader, CardTitle };

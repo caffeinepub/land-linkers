@@ -807,15 +807,6 @@ export async function assignPlotToAgent(
  */
 export async function ensureAdminDoc(): Promise<void> {
   try {
-    // ── One-time database wipe on fresh deploy ──────────────────────────────
-    // Runs only once, guarded by a localStorage flag. After the wipe, the
-    // flag is set so subsequent logins skip this step.
-    const wipeFlag = "ll_db_wiped_v1";
-    if (!localStorage.getItem(wipeFlag)) {
-      await wipeDatabase();
-      localStorage.setItem(wipeFlag, "1");
-    }
-
     // 1. Write/update the admin document
     await setDoc(
       doc(db, "users", "admin-portal-user"),

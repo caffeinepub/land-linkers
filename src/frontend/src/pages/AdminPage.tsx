@@ -17,26 +17,15 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { collection, onSnapshot } from "firebase/firestore";
 import {
   CheckCircle,
-  Home,
   ImageIcon,
   MapPin,
-  PlusCircle,
   RefreshCw,
   Shield,
   Trash2,
@@ -45,15 +34,13 @@ import {
 import { motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { db } from "../utils/firebase";
 import type { AppUser, PlotListing } from "../utils/firebaseStore";
 import {
-  assignPlotToAgent,
   deleteListing,
   deletePlotPhotos,
   deleteUser,
-  getAgentUsers,
   getListings,
-  getUsers,
   verifyListing,
 } from "../utils/firebaseStore";
 
@@ -63,41 +50,44 @@ export function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
-  const [agentUsers, setAgentUsers] = useState<AppUser[]>([]);
-  const [addPlotOpen, setAddPlotOpen] = useState(false);
-  const [newPlotAddress, setNewPlotAddress] = useState("");
-  const [newPlotPrice, setNewPlotPrice] = useState("");
-  const [newPlotSize, setNewPlotSize] = useState("");
-  const [newPlotStatus, setNewPlotStatus] = useState<"for-sale" | "pending">(
-    "for-sale",
-  );
-  const [newPlotAgentId, setNewPlotAgentId] = useState("");
-  const [isAddingPlot, setIsAddingPlot] = useState(false);
 
-  const loadData = useCallback(async (showLoading = true) => {
-    if (showLoading) setLoading(true);
+  // Real-time users listener
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, "users"),
+      (snapshot) => {
+        const usersData = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as AppUser[];
+        setUsers(usersData);
+        setLoading(false);
+      },
+      () => {
+        toast.error("Failed to load users.");
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, []);
+
+  // Load plots once and poll
+  const loadPlots = useCallback(async (showLoading = false) => {
     try {
-      const [plotData, userData, agentData] = await Promise.all([
-        getListings(),
-        getUsers(),
-        getAgentUsers(),
-      ]);
+      const plotData = await getListings();
       setPlots(plotData);
-      setUsers(userData);
-      setAgentUsers(agentData);
+      if (showLoading) setLoading(false);
     } catch {
-      toast.error("Failed to load dashboard data.");
-    } finally {
+      toast.error("Failed to load plots.");
       if (showLoading) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
-    // Poll every 30 seconds for new users/plots
-    const interval = setInterval(() => loadData(false), 30000);
+    loadPlots(true);
+    const interval = setInterval(() => loadPlots(false), 30000);
     return () => clearInterval(interval);
-  }, [loadData]);
+  }, [loadPlots]);
 
   const handleDeletePlot = async (plot: PlotListing) => {
     setDeletingId(plot.id);
@@ -137,48 +127,12 @@ export function AdminPage() {
   const handleDeleteUser = async (userId: string) => {
     try {
       await deleteUser(userId);
-      setUsers((prev) => prev.filter((u) => u.id !== userId));
-      toast.success("User deleted.");
+      // users state will auto-update via onSnapshot
+      toast.success(
+        "User removed from database. To fully delete their login, go to Firebase Console → Authentication.",
+      );
     } catch {
       toast.error("Failed to delete user.");
-    }
-  };
-
-  const handleAddPlot = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPlotAddress.trim()) {
-      toast.error("Please enter a plot address.");
-      return;
-    }
-    setIsAddingPlot(true);
-    try {
-      const selectedAgent = agentUsers.find((a) => a.id === newPlotAgentId);
-      await assignPlotToAgent({
-        ownerName: "Admin",
-        plotAddress: newPlotAddress.trim(),
-        price: newPlotPrice.trim(),
-        plotSize: newPlotSize.trim(),
-        status: newPlotStatus,
-        addedBy: "agent",
-        verified: true,
-        createdAt: new Date().toISOString(),
-        assignedAgentId: newPlotAgentId || undefined,
-        assignedAgentName:
-          selectedAgent?.name || selectedAgent?.loginId || undefined,
-      });
-      toast.success("Plot added and assigned to agent.");
-      setAddPlotOpen(false);
-      setNewPlotAddress("");
-      setNewPlotPrice("");
-      setNewPlotSize("");
-      setNewPlotAgentId("");
-      // Reload plots
-      const plotData = await getListings();
-      setPlots(plotData);
-    } catch {
-      toast.error("Failed to add plot.");
-    } finally {
-      setIsAddingPlot(false);
     }
   };
 
@@ -210,137 +164,12 @@ export function AdminPage() {
                 size="sm"
                 variant="outline"
                 className="gap-1.5"
-                onClick={() => loadData()}
+                onClick={() => loadPlots(false)}
                 data-ocid="admin.secondary_button"
               >
                 <RefreshCw className="w-4 h-4" />
                 Refresh
               </Button>
-              <Dialog open={addPlotOpen} onOpenChange={setAddPlotOpen}>
-                <DialogTrigger asChild>
-                  <Button
-                    size="sm"
-                    className="gap-1.5"
-                    data-ocid="admin.open_modal_button"
-                  >
-                    <PlusCircle className="w-4 h-4" />
-                    Add New Plot
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-md" data-ocid="admin.dialog">
-                  <DialogHeader>
-                    <DialogTitle className="font-serif">
-                      Add New Plot
-                    </DialogTitle>
-                  </DialogHeader>
-                  <form onSubmit={handleAddPlot} className="space-y-4 mt-2">
-                    <div>
-                      <Label htmlFor="np-address">Plot Address *</Label>
-                      <Input
-                        id="np-address"
-                        value={newPlotAddress}
-                        onChange={(e) => setNewPlotAddress(e.target.value)}
-                        placeholder="Enter full plot address"
-                        className="mt-1"
-                        data-ocid="admin.input"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <Label htmlFor="np-price">Price (₹)</Label>
-                        <Input
-                          id="np-price"
-                          value={newPlotPrice}
-                          onChange={(e) => setNewPlotPrice(e.target.value)}
-                          placeholder="e.g. 500000"
-                          className="mt-1"
-                          data-ocid="admin.input"
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="np-size">Plot Size</Label>
-                        <Input
-                          id="np-size"
-                          value={newPlotSize}
-                          onChange={(e) => setNewPlotSize(e.target.value)}
-                          placeholder="e.g. 200 sq.yd"
-                          className="mt-1"
-                          data-ocid="admin.input"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Label>Status</Label>
-                      <Select
-                        value={newPlotStatus}
-                        onValueChange={(v) =>
-                          setNewPlotStatus(v as "for-sale" | "pending")
-                        }
-                      >
-                        <SelectTrigger
-                          className="mt-1"
-                          data-ocid="admin.select"
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="for-sale">For Sale</SelectItem>
-                          <SelectItem value="pending">Pending</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label>Assign to Agent</Label>
-                      <Select
-                        value={newPlotAgentId}
-                        onValueChange={setNewPlotAgentId}
-                      >
-                        <SelectTrigger
-                          className="mt-1"
-                          data-ocid="admin.select"
-                        >
-                          <SelectValue placeholder="Select an agent (optional)" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {agentUsers.map((agent) => (
-                            <SelectItem key={agent.id} value={agent.id}>
-                              {agent.name ||
-                                agent.loginId ||
-                                agent.email ||
-                                agent.id}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex justify-end gap-2 pt-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setAddPlotOpen(false)}
-                        data-ocid="admin.cancel_button"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        type="submit"
-                        disabled={isAddingPlot}
-                        data-ocid="admin.submit_button"
-                      >
-                        {isAddingPlot ? "Adding..." : "Add Plot"}
-                      </Button>
-                    </div>
-                  </form>
-                </DialogContent>
-              </Dialog>
-              <a
-                href="/"
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-muted text-sm font-medium text-foreground transition-colors"
-                data-ocid="admin.link"
-              >
-                <Home className="w-4 h-4" />
-                Home
-              </a>
             </div>
           </div>
 

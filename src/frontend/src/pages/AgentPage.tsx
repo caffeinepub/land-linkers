@@ -21,6 +21,7 @@ import {
   Check,
   ChevronDown,
   Copy,
+  Crosshair,
   ImageIcon,
   Loader2,
   Mail,
@@ -29,6 +30,7 @@ import {
   Phone,
   PlusCircle,
   Search,
+  Share2,
   Trash2,
   Upload,
   User,
@@ -104,6 +106,8 @@ export function AgentPage() {
   // Map refs for plot pins
   const plotMapRef = useRef<HTMLDivElement>(null);
   const plotLeafletRef = useRef<any>(null);
+  const mapDialogRef = useRef<HTMLDivElement>(null);
+  const mapDialogLeafletRef = useRef<any>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -199,6 +203,46 @@ export function AgentPage() {
     }, 100);
     return () => clearTimeout(timer);
   }, [graphTab, listings]);
+
+  // Map dialog effect - initializes interactive Leaflet map when dialog opens
+  useEffect(() => {
+    if (!mapDialogOpen) return;
+    const timer = setTimeout(() => {
+      if (!mapDialogRef.current) return;
+      if (mapDialogLeafletRef.current) {
+        mapDialogLeafletRef.current.remove();
+        mapDialogLeafletRef.current = null;
+      }
+      let L: any;
+      try {
+        L = (window as any).L || require("leaflet");
+      } catch {
+        L = (window as any).L;
+      }
+      if (!L) return;
+      const map = L.map(mapDialogRef.current).setView([20.5937, 78.9629], 5);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(map);
+
+      const allPlots = [...listings];
+      const plotsWithCoords = allPlots.filter((l) => l.lat && l.lng);
+      for (const plot of plotsWithCoords) {
+        const marker = L.marker([plot.lat, plot.lng]).addTo(map);
+        marker.bindPopup(
+          `<strong>${plot.ownerName || "Plot"}</strong><br/>${plot.location || plot.plotAddress || ""}<br/>Status: ${plot.status}`,
+        );
+      }
+      if (plotsWithCoords.length > 0) {
+        const bounds = L.latLngBounds(
+          plotsWithCoords.map((p) => [p.lat, p.lng]),
+        );
+        map.fitBounds(bounds, { padding: [30, 30] });
+      }
+      mapDialogLeafletRef.current = map;
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [mapDialogOpen, listings]);
 
   const forSaleListings = listings.filter((l) => l.status === "for-sale");
   const soldListings = listings.filter((l) => l.status === "sold");
@@ -818,6 +862,30 @@ export function AgentPage() {
                             >
                               Mark as Sold
                             </Button>
+                            {listing.lat && listing.lng && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-xs h-7 px-2 gap-1"
+                                onClick={() => {
+                                  const shareUrl = `https://maps.google.com/?q=${listing.lat},${listing.lng}`;
+                                  if (navigator.share) {
+                                    navigator.share({
+                                      title:
+                                        listing.ownerName || "Plot Location",
+                                      url: shareUrl,
+                                    });
+                                  } else {
+                                    navigator.clipboard.writeText(shareUrl);
+                                    toast.success("Location link copied!");
+                                  }
+                                }}
+                                data-ocid="agent.secondary_button"
+                              >
+                                <Share2 className="w-3 h-3" />
+                                Share Location
+                              </Button>
+                            )}
                           </div>
                         </div>
                       ))
@@ -866,6 +934,29 @@ export function AgentPage() {
                           >
                             View Plot Details
                           </Button>
+                          {listing.lat && listing.lng && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="mt-1 text-xs h-7 px-2 gap-1"
+                              onClick={() => {
+                                const shareUrl = `https://maps.google.com/?q=${listing.lat},${listing.lng}`;
+                                if (navigator.share) {
+                                  navigator.share({
+                                    title: listing.ownerName || "Plot Location",
+                                    url: shareUrl,
+                                  });
+                                } else {
+                                  navigator.clipboard.writeText(shareUrl);
+                                  toast.success("Location link copied!");
+                                }
+                              }}
+                              data-ocid="agent.secondary_button"
+                            >
+                              <Share2 className="w-3 h-3" />
+                              Share Location
+                            </Button>
+                          )}
                         </div>
                       ))
                     )}
@@ -921,15 +1012,37 @@ export function AgentPage() {
                   </div>
                   <div
                     className="rounded-xl overflow-hidden border border-border"
-                    style={{ height: "420px" }}
+                    style={{ height: "420px", position: "relative" }}
                   >
-                    <iframe
-                      title="Agent & Owner Plot Sales Map"
-                      width="100%"
-                      height="100%"
-                      style={{ border: 0 }}
-                      src="https://www.openstreetmap.org/export/embed.html?bbox=68.0,8.0,97.5,37.0&layer=mapnik"
+                    <div
+                      ref={mapDialogRef}
+                      style={{ height: "100%", width: "100%" }}
                     />
+                    {/* My Location button */}
+                    <button
+                      type="button"
+                      style={{
+                        position: "absolute",
+                        top: 10,
+                        right: 10,
+                        zIndex: 1000,
+                      }}
+                      className="bg-white rounded-lg shadow-md px-3 py-2 text-sm font-medium flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 transition-colors"
+                      onClick={() => {
+                        if (!navigator.geolocation) return;
+                        navigator.geolocation.getCurrentPosition((pos) => {
+                          if (mapDialogLeafletRef.current) {
+                            mapDialogLeafletRef.current.setView(
+                              [pos.coords.latitude, pos.coords.longitude],
+                              14,
+                            );
+                          }
+                        });
+                      }}
+                    >
+                      <Crosshair className="w-4 h-4 text-primary" />
+                      <span className="text-xs">My Location</span>
+                    </button>
                   </div>
                   {forSaleListings.length > 0 && (
                     <div className="mt-3 space-y-2">

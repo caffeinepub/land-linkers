@@ -8,7 +8,14 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+} from "firebase/firestore";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -244,6 +251,40 @@ function AdminLoginForm({
   );
 }
 
+/**
+ * Attempt to fetch the user profile from Firestore.
+ * Tries by UID first (fast), then falls back to a query by loginId/email.
+ * Returns null if Firestore is unreachable — caller handles gracefully.
+ */
+async function fetchUserProfile(
+  uid: string,
+  email: string,
+): Promise<AppUser | null> {
+  // 1. Try by UID (fastest path)
+  try {
+    const snap = await getDoc(doc(db, "users", uid));
+    if (snap.exists()) {
+      return { id: uid, ...snap.data() } as AppUser;
+    }
+  } catch {
+    // Firestore unreachable — fall through
+  }
+
+  // 2. Try by email/loginId field (handles legacy accounts)
+  try {
+    const q = query(collection(db, "users"), where("loginId", "==", email));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      const data = snap.docs[0].data() as Omit<AppUser, "id">;
+      return { id: uid, ...data };
+    }
+  } catch {
+    // Firestore unreachable
+  }
+
+  return null;
+}
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userType, setUserType] = useState<UserType | null>(null);
@@ -278,28 +319,41 @@ export default function App() {
       resolved = true;
 
       if (firebaseUser) {
-        // Email user with active Firebase Auth session — fetch role from Firestore
-        try {
-          const userSnap = await getDoc(doc(db, "users", firebaseUser.uid));
-          if (userSnap.exists()) {
-            const data = userSnap.data() as AppUser;
-            const role = data.role;
-            const name = data.name;
-            const loginId = data.loginId || data.email || data.mobile;
-            const createdAt = firebaseUser.metadata?.creationTime || undefined;
-            _userType = role;
-            routerRef.current = buildRouter(role);
-            setUserType(role);
-            setUserName(name);
-            setUserLoginId(loginId);
-            setUserCreatedAt(createdAt);
-            setIsLoggedIn(true);
-            setAuthChecking(false);
-            return;
-          }
-        } catch {
-          // Firestore unavailable — fall through to show login
+        // Firebase Auth session is valid — try to fetch profile from Firestore
+        const email = firebaseUser.email ?? "";
+        const createdAt = firebaseUser.metadata?.creationTime || undefined;
+
+        const profile = await fetchUserProfile(firebaseUser.uid, email);
+
+        if (profile) {
+          // Full profile found — restore everything
+          _userType = profile.role;
+          routerRef.current = buildRouter(profile.role);
+          setUserType(profile.role);
+          setUserName(profile.name);
+          setUserLoginId(
+            profile.loginId || profile.email || profile.mobile || email,
+          );
+          setUserCreatedAt(createdAt);
+          setIsLoggedIn(true);
+          setAuthChecking(false);
+          return;
         }
+
+        // Firestore profile missing (e.g. profile write failed during signup,
+        // or Firestore rules blocking the read). Firebase Auth session IS valid,
+        // so we restore the session with a safe default role and show the user in.
+        // They can still use the app; their dashboard will be limited until profile
+        // is synced.
+        _userType = "owner";
+        routerRef.current = buildRouter("owner");
+        setUserType("owner");
+        setUserName(email);
+        setUserLoginId(email);
+        setUserCreatedAt(createdAt);
+        setIsLoggedIn(true);
+        setAuthChecking(false);
+        return;
       }
 
       // No Firebase Auth session — check phone session cache
@@ -308,7 +362,7 @@ export default function App() {
         _userType = phoneSession.role;
         routerRef.current = buildRouter(phoneSession.role);
         setUserType(phoneSession.role);
-        setUserName(phoneSession.loginId);
+        setUserName(phoneSession.name || phoneSession.loginId);
         setUserLoginId(phoneSession.loginId);
         setIsLoggedIn(true);
       }

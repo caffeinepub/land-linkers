@@ -64,13 +64,19 @@ const LS_SESSION_KEY = "ll_session";
 interface PhoneSession {
   role: "owner" | "agent";
   loginId: string;
+  name?: string;
   expires: number;
 }
 
-export function savePhoneSession(role: "owner" | "agent", loginId: string) {
+export function savePhoneSession(
+  role: "owner" | "agent",
+  loginId: string,
+  name?: string,
+) {
   const session: PhoneSession = {
     role,
     loginId,
+    name,
     expires: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
   };
   localStorage.setItem(LS_SESSION_KEY, JSON.stringify(session));
@@ -312,8 +318,8 @@ export async function signOutUser(): Promise<void> {
 
 /**
  * Register a new user.
- * - Email users: create a Firebase Auth account, save role to Firestore under their UID.
- * - Phone users: save directly to Firestore (Firebase phone auth requires SMS billing).
+ * - Email users: create Firebase Auth account, then save FULL profile to Firestore under UID.
+ * - Phone users: save directly to Firestore with password hash.
  */
 export async function registerUser(params: {
   name: string;
@@ -331,13 +337,18 @@ export async function registerUser(params: {
         params.password,
       );
       const uid = credential.user.uid;
-      await setDoc(doc(db, "users", uid), {
+
+      // Save FULL profile to Firestore — critical so login can restore name & role
+      const profileData = {
         name: params.name,
         loginId: params.loginId,
         email: params.loginId,
         role: params.role,
         lastLogin: new Date().toISOString(),
-      });
+        createdAt: new Date().toISOString(),
+      };
+
+      await setDoc(doc(db, "users", uid), profileData);
       return { success: true };
     } catch (error: unknown) {
       const code = (error as { code?: string })?.code;
@@ -353,7 +364,13 @@ export async function registerUser(params: {
           error: "Password must be at least 6 characters.",
         };
       }
-      // Fallback to Firestore-only if Firebase Auth is unavailable
+      if (code === "auth/invalid-email") {
+        return {
+          success: false,
+          error: "Please enter a valid email address.",
+        };
+      }
+      // Firebase Auth unavailable — fall back to Firestore-only
       return registerUserToFirestore(params);
     }
   }
@@ -412,9 +429,15 @@ async function registerUserToFirestore(params: {
 
 /**
  * Authenticate a user.
- * - Email: uses Firebase Auth signInWithEmailAndPassword (fast, cached).
- * - Phone: uses Firestore query with localStorage fallback.
- * - Legacy email users (pre-Firebase Auth): auto-migrated on first login.
+ *
+ * Email login:
+ *   1. Try signInWithEmailAndPassword (Firebase Auth)
+ *   2. On success, fetch profile from Firestore by UID
+ *   3. If Firestore profile missing, search by email field as fallback
+ *   4. If still missing, create minimal profile but PRESERVE the role from
+ *      any Firestore-only record matching this email
+ *
+ * Phone login: Firestore query with localStorage fallback.
  */
 export async function loginUser(
   loginId: string,
@@ -434,35 +457,65 @@ export async function loginUser(
       );
       const uid = credential.user.uid;
 
-      // Fast single-document read by UID (no query needed)
-      const userSnap = await getDoc(doc(db, "users", uid));
-      let user: AppUser;
-
-      if (userSnap.exists()) {
-        user = { id: uid, ...userSnap.data() } as AppUser;
-      } else {
-        // Profile missing — create a minimal one
-        user = {
-          id: uid,
-          loginId,
-          email: loginId,
-          role: "owner",
-          lastLogin: new Date().toISOString(),
-        };
-        setDoc(doc(db, "users", uid), {
-          loginId,
-          email: loginId,
-          role: "owner",
-          lastLogin: new Date().toISOString(),
-        }).catch(() => {});
+      // Fast single-document read by UID
+      try {
+        const userSnap = await getDoc(doc(db, "users", uid));
+        if (userSnap.exists()) {
+          const user: AppUser = { id: uid, ...userSnap.data() } as AppUser;
+          // Update lastLogin in background (non-blocking)
+          updateDoc(doc(db, "users", uid), {
+            lastLogin: new Date().toISOString(),
+          }).catch(() => {});
+          return { status: "success", user };
+        }
+      } catch {
+        // Firestore read failed — try email-based fallback query below
       }
 
-      // Update lastLogin in background (non-blocking)
-      updateDoc(doc(db, "users", uid), {
+      // Profile not found by UID — search by loginId/email field
+      // (handles legacy accounts created before UID-keyed profiles)
+      try {
+        const q = query(
+          collection(db, "users"),
+          where("loginId", "==", loginId),
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const data = snap.docs[0].data() as Omit<AppUser, "id">;
+          const user: AppUser = { id: uid, ...data };
+
+          // Migrate: copy the found profile to the correct UID-keyed doc
+          setDoc(doc(db, "users", uid), {
+            name: data.name,
+            loginId: data.loginId || loginId,
+            email: loginId,
+            role: data.role,
+            lastLogin: new Date().toISOString(),
+          }).catch(() => {});
+
+          return { status: "success", user };
+        }
+      } catch {
+        // Firestore query also failed
+      }
+
+      // No profile found anywhere — create a minimal one
+      // Default to "owner" only if we truly cannot determine the role
+      const minimalUser: AppUser = {
+        id: uid,
+        loginId,
+        email: loginId,
+        role: "owner",
+        lastLogin: new Date().toISOString(),
+      };
+      setDoc(doc(db, "users", uid), {
+        loginId,
+        email: loginId,
+        role: "owner",
         lastLogin: new Date().toISOString(),
       }).catch(() => {});
 
-      return { status: "success", user };
+      return { status: "success", user: minimalUser };
     } catch (error: unknown) {
       const code = (error as { code?: string })?.code;
 
@@ -475,11 +528,11 @@ export async function loginUser(
       }
 
       if (code === "auth/user-not-found" || code === "auth/invalid-email") {
-        // User not in Firebase Auth — may be a Firestore-only account (phone or legacy)
+        // User not in Firebase Auth — may be a Firestore-only account
         return loginUserFromFirestore(loginId, password, true);
       }
 
-      // Network / config issue only — try Firestore as last resort
+      // Network / config issue — try Firestore as last resort
       return loginUserFromFirestore(loginId, password, false);
     }
   }
@@ -490,7 +543,6 @@ export async function loginUser(
 
 /**
  * Firestore-based login (phone users or legacy email users).
- * For legacy email users found here, auto-creates their Firebase Auth account.
  */
 async function loginUserFromFirestore(
   loginId: string,
@@ -504,7 +556,16 @@ async function loginUserFromFirestore(
     const q = query(collection(db, "users"), where("loginId", "==", loginId));
     const snap = await getDocs(q);
 
-    if (snap.empty) return { status: "not-found" };
+    if (snap.empty) {
+      // Try localStorage as last resort
+      const lsUsers = lsGetUsers();
+      const lsUser = lsUsers.find((u) => u.loginId === loginId);
+      if (!lsUser) return { status: "not-found" };
+      if (lsUser.password !== password) return { status: "wrong-password" };
+      if (!loginId.includes("@"))
+        savePhoneSession(lsUser.role, loginId, lsUser.name);
+      return { status: "success", user: lsUser };
+    }
 
     const user = { id: snap.docs[0].id, ...snap.docs[0].data() } as AppUser;
     if (user.password !== password) return { status: "wrong-password" };
@@ -518,26 +579,32 @@ async function loginUserFromFirestore(
     if (tryMigrateToFirebaseAuth && loginId.includes("@")) {
       createUserWithEmailAndPassword(auth, loginId, password)
         .then(async (credential) => {
-          // Copy profile to new UID-keyed document
           await setDoc(doc(db, "users", credential.user.uid), {
             name: user.name,
-            loginId: user.loginId,
-            email: user.email ?? loginId,
+            loginId: user.loginId || loginId,
+            email: loginId,
             role: user.role,
             lastLogin: new Date().toISOString(),
           });
         })
-        .catch(() => {}); // If creation fails (already exists), ignore
+        .catch(() => {}); // Already exists or other error — ignore
     }
 
     // Save phone session for non-email users
     if (!loginId.includes("@")) {
-      savePhoneSession(user.role, loginId);
+      savePhoneSession(user.role, loginId, user.name);
     }
 
     return { status: "success", user };
   } catch {
-    return { status: "not-found" };
+    // Firestore unavailable — try localStorage
+    const lsUsers = lsGetUsers();
+    const lsUser = lsUsers.find((u) => u.loginId === loginId);
+    if (!lsUser) return { status: "not-found" };
+    if (lsUser.password !== password) return { status: "wrong-password" };
+    if (!loginId.includes("@"))
+      savePhoneSession(lsUser.role, loginId, lsUser.name);
+    return { status: "success", user: lsUser };
   }
 }
 

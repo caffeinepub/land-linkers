@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -22,17 +22,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { collection, onSnapshot } from "firebase/firestore";
+import type { FirestoreError } from "firebase/firestore";
 import {
+  AlertTriangle,
   CalendarDays,
   CheckCircle,
   ImageIcon,
   MapPin,
+  RefreshCw,
   Shield,
   Trash2,
   Users,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { db } from "../utils/firebase";
 import type { AppUser, PlotListing } from "../utils/firebaseStore";
@@ -45,14 +48,44 @@ import {
 
 const NEW_LOGO = "/assets/image-019d4503-4266-7396-af3a-623deafe0238.png";
 
+const CORRECT_FIRESTORE_RULES = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /plots/{plotId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAny(['ownerName', 'status', 'addedBy']);
+    }
+    match /plotPhotos/{photoId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['photos']);
+    }
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAny(['role', 'lastLogin', 'name', 'loginId', 'email', 'mobile', 'password', 'createdAt']);
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}`;
+
 export function AdminPage() {
   const [plots, setPlots] = useState<PlotListing[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
+  const handleRetry = useCallback(() => {
+    setError(null);
+    setLoading(true);
+    setRetryKey((k) => k + 1);
+  }, []);
+
   // Real-time users listener
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryKey is intentional trigger
   useEffect(() => {
     const unsub = onSnapshot(
       collection(db, "users"),
@@ -64,15 +97,24 @@ export function AdminPage() {
         setUsers(usersData);
         setLoading(false);
       },
-      () => {
-        toast.error("Failed to load users.");
+      (err: FirestoreError) => {
+        let message: string;
+        if (err.code === "permission-denied") {
+          message =
+            "Permission denied: Update Firestore Security Rules to allow reads on the 'users' and 'plots' collections.";
+        } else {
+          message = err.message || "Failed to load users.";
+        }
+        toast.error(message);
+        setError(message);
         setLoading(false);
       },
     );
     return () => unsub();
-  }, []);
+  }, [retryKey]);
 
-  // Real-time plots listener (replaces polling interval)
+  // Real-time plots listener
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryKey is intentional trigger
   useEffect(() => {
     const unsub = onSnapshot(
       collection(db, "plots"),
@@ -83,12 +125,22 @@ export function AdminPage() {
         })) as PlotListing[];
         setPlots(plotData);
       },
-      () => {
-        toast.error("Failed to load plots.");
+      (err: FirestoreError) => {
+        let message: string;
+        if (err.code === "permission-denied") {
+          message =
+            "Permission denied: Update Firestore Security Rules to allow reads on the 'plots' collection.";
+        } else {
+          message = err.message || "Failed to load plots.";
+        }
+        toast.error(message);
+        // Only set error if not already set (users error takes precedence)
+        setError((prev) => prev ?? message);
+        setLoading(false);
       },
     );
     return () => unsub();
-  }, []);
+  }, [retryKey]);
 
   // Compute plot counts per user — keyed by user ID, with email/mobile fallback
   const plotCountByUserId = useMemo(() => {
@@ -222,6 +274,52 @@ export function AdminPage() {
               </div>
             </div>
           </div>
+
+          {/* ── Error Banner ── */}
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6"
+              data-ocid="admin.error_state"
+            >
+              <Card className="border-destructive/50 bg-destructive/5">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-destructive text-base">
+                    <AlertTriangle className="w-5 h-5 shrink-0" />
+                    Data Loading Failed
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-destructive/90">{error}</p>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">
+                      Go to{" "}
+                      <strong>Firebase Console → Firestore → Rules</strong> and
+                      ensure these rules are set:
+                    </p>
+                    <pre className="bg-muted/60 border border-border rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre leading-relaxed text-foreground/80">
+                      {CORRECT_FIRESTORE_RULES}
+                    </pre>
+                  </div>
+
+                  <div className="pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRetry}
+                      className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      data-ocid="admin.primary_button"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Retry
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
 
           {/* Stats */}
           <div className="grid grid-cols-2 gap-4 mb-8">
@@ -668,3 +766,6 @@ function UserCard({
     </Card>
   );
 }
+
+// Keep Dialog import used elsewhere (photo slideshow integration guard)
+export { Dialog, DialogContent, DialogHeader, DialogTitle };
